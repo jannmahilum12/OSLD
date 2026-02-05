@@ -32,6 +32,7 @@ import {
   Trash2,
   Clock,
   Search,
+  Filter,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -4861,16 +4862,20 @@ function AODashboard({
 
         {/* Activity Log Detail Dialog */}
         <Dialog open={isLogDetailOpen} onOpenChange={setIsLogDetailOpen}>
-          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-bold" style={{ color: "#003b27" }}>
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-white text-black">
+            <DialogHeader className="text-black">
+              <DialogTitle className="text-xl font-bold text-black" style={{ color: "#003b27" }}>
                 Activity Details
               </DialogTitle>
             </DialogHeader>
-            {selectedLog && (
-              <div className="space-y-4 py-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">Status</span>
+            {!selectedLog ? (
+              <div className="py-8 text-center text-gray-700 font-medium">
+                Loading activity details...
+              </div>
+            ) : (
+              <div className="space-y-4 py-4 text-black">
+                <div className="flex items-center justify-between text-black">
+                  <span className="text-sm text-gray-700 font-medium">Status</span>
                   <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(
                     selectedLog.isGroupedView 
                       ? (selectedLog.accomplishmentData?.status === 'For Revision' || selectedLog.liquidationData?.status === 'For Revision' 

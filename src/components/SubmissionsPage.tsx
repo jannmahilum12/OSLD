@@ -151,18 +151,23 @@ export default function SubmissionsPage({
     
     // For Letter of Appeal, fetch the activity due title from osld_events
     if (submission.submission_type === 'Letter of Appeal' && submission.event_id) {
-      const { data: eventData } = await supabase
+      console.log('Fetching activity title for event_id:', submission.event_id);
+      const { data: eventData, error } = await supabase
         .from('osld_events')
         .select('title')
         .eq('id', submission.event_id)
         .single();
       
+      console.log('Event data:', eventData, 'Error:', error);
+      
       if (eventData) {
         submission.activity_due_title = eventData.title;
+        console.log('Activity title set to:', submission.activity_due_title);
       }
     }
     
-    setSelectedSubmission(submission);
+    console.log('Selected submission before setting state:', submission);
+    setSelectedSubmission({...submission});
     setIsDetailDialogOpen(true);
   };
 
@@ -729,6 +734,17 @@ export default function SubmissionsPage({
                 </div>
               )}
 
+              {/* Activity Name Title - Only show for Letter of Appeal submissions */}
+              {selectedSubmission.submission_type === 'Letter of Appeal' && (
+                <div className="p-4 border-2 border-blue-200 rounded-lg bg-blue-50">
+                  <div className="flex items-center gap-2 text-blue-600 mb-2">
+                    <Calendar className="h-5 w-5" />
+                    <span className="font-semibold">Activity Name</span>
+                  </div>
+                  <p className="text-gray-800 font-medium">{selectedSubmission.activity_due_title || selectedSubmission.activity_title || 'Not specified'}</p>
+                </div>
+              )}
+
               {/* Submission Info */}
               <div className="p-4 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-2 text-gray-500 mb-2">
@@ -1284,7 +1300,21 @@ export default function SubmissionsPage({
                             </div>
                             <div className="flex-1">
                               <h3 className="font-bold text-lg text-gray-800">
-                                {submission.activity_title}
+                                {submission.submission_type === 'Letter of Appeal' 
+                                  ? (() => {
+                                      // Extract event title and report type from activity_title
+                                      // Format: "Letter of Appeal - Accomplishment Report" or "Letter of Appeal - Liquidation Report"
+                                      const parts = submission.activity_title.split(' - ');
+                                      if (parts.length >= 2) {
+                                        const reportType = parts[parts.length - 1];
+                                        // Get event title (everything except the report type suffix)
+                                        const eventTitle = parts.slice(0, -1).join(' - ').replace('Letter of Appeal', '').replace(/^[\s-]+/, '').trim();
+                                        const shortReportType = reportType.includes('Accomplishment') ? 'Accomplishment' : 'Liquidation';
+                                        return eventTitle ? `${eventTitle} - ${shortReportType}` : submission.activity_title;
+                                      }
+                                      return submission.activity_title;
+                                    })()
+                                  : submission.activity_title}
                               </h3>
                               <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-600">
                                 <span className="flex items-center gap-1">
