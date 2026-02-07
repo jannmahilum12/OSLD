@@ -358,28 +358,33 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
   // Show when own org's appeal was rejected/declined
   if (appealRejected && isOwnDeadline) {
     return (
-      <div className=\"mt-3 p-4 bg-red-50 border border-red-300 rounded-xl shadow-sm\">
-        <div className=\"flex items-center gap-2 mb-3\">
-          <span className=\"px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-red-100 text-red-700 rounded\">
+      <div className="mt-3 p-4 bg-red-50 border border-red-300 rounded-xl shadow-sm">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-red-100 text-red-700 rounded">
             Appeal Declined
           </span>
         </div>
-        <p className=\"text-sm text-gray-600 leading-relaxed mb-3\">
+        <p className="text-sm text-gray-600 leading-relaxed mb-3">
           Your appeal for this activity has been declined. {reportType} report must be submitted before the original deadline.
         </p>
         {appealRejectionReason && (
-          <div className=\"bg-white border border-red-200 rounded p-3 mb-3\">
-            <p className=\"text-xs font-semibold text-red-700 mb-1\">Reason for Decline:</p>
-            <p className=\"text-xs text-gray-700 whitespace-pre-wrap\">{appealRejectionReason}</p>
+          <div className="bg-white border border-red-200 rounded p-3 mb-3">
+            <p className="text-xs font-semibold text-red-700 mb-1">Reason for Decline:</p>
+            <p className="text-xs text-gray-700 whitespace-pre-wrap">{appealRejectionReason}</p>
           </div>
         )}
         {isOwnDeadline && (
-          <div className=\"pt-3 border-t border-red-200\">
+          <div className="pt-3 border-t border-red-200">
             <Button
-              size=\"sm\"
+              size="sm"
               onClick={() => setShowAppealForm(true)}
-              className=\"w-full px-4 py-1.5 text-xs font-semibold rounded-lg\"
-              style={{ borderColor: \"#003b27\", color: \"#003b27\", border: \"2px solid #003b27\", backgroundColor: \"white\" }}
+              className="w-full px-4 py-1.5 text-xs font-semibold rounded-lg"
+              style={{
+                borderColor: "#003b27",
+                color: "#003b27",
+                border: "2px solid #003b27",
+                backgroundColor: "white",
+              }}
             >
               Submit Another Appeal
             </Button>
@@ -389,23 +394,8 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
     );
   }
 
-  // Show when own org (USG) has submitted an appeal
-  if (appealSubmitted && isOwnDeadline) {
-    // Check if appeal was approved (has override)
-    if (appealApproved) {
-      return (
-        <div className="mt-3 p-4 bg-gradient-to-br from-green-50 via-emerald-50 to-green-100 border border-green-300 rounded-xl shadow-sm">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs font-semibold uppercase tracking-wider text-green-700">Appeal Approved</span>
-          </div>
-          <p className="text-xs text-green-700 leading-relaxed">
-            The Appeal you submitted got approved. Please submit {reportType} on submission page today or your account will be on hold.
-          </p>
-        </div>
-      );
-    }
-    
+  // Show when own org (USG) has submitted an appeal (not yet approved)
+  if (appealSubmitted && isOwnDeadline && !appealApproved) {
     // If not approved yet, show waiting message
     return (
       <div className="mt-3 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">

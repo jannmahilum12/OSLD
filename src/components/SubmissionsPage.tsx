@@ -41,7 +41,9 @@ interface SubmissionsPageProps {
   orgLogo?: string;
   isEmbedded?: boolean;
   hideNavButtons?: boolean;
-  onActivityChange?: () => void; // Callback to refresh activity logs in parent\n  activeSubmissionTab?: string;\n  setActiveSubmissionTab?: (tab: string) => void;
+  onActivityChange?: () => void; // Callback to refresh activity logs in parent
+  activeSubmissionTab?: string;
+  setActiveSubmissionTab?: (tab: string) => void;
 }
 
 interface Submission {
@@ -80,6 +82,7 @@ export default function SubmissionsPage({
   activeSubmissionTab = "Request to Conduct Activity",
   setActiveSubmissionTab,
 }: SubmissionsPageProps) {
+
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
@@ -226,13 +229,33 @@ export default function SubmissionsPage({
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'Approved':
-        return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Approved</Badge>;
+        return (
+          <Badge className="bg-gradient-to-r from-emerald-50 to-green-100 text-emerald-800 border border-emerald-300 hover:bg-green-100 font-semibold px-3 py-1 shadow-sm">
+            <CheckCircle className="h-3.5 w-3.5 mr-1.5 inline-block" />
+            Approved
+          </Badge>
+        );
       case 'For Revision':
-        return <Badge className="bg-orange-100 text-orange-800 hover:bg-orange-100">For Revision</Badge>;
+        return (
+          <Badge className="bg-gradient-to-r from-orange-50 to-amber-100 text-orange-800 border border-orange-300 hover:bg-orange-100 font-semibold px-3 py-1 shadow-sm">
+            <AlertTriangle className="h-3.5 w-3.5 mr-1.5 inline-block" />
+            For Revision
+          </Badge>
+        );
       case 'Rejected':
-        return <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Rejected</Badge>;
+        return (
+          <Badge className="bg-gradient-to-r from-red-50 to-rose-100 text-red-800 border border-red-300 hover:bg-red-100 font-semibold px-3 py-1 shadow-sm">
+            <X className="h-3.5 w-3.5 mr-1.5 inline-block" />
+            Rejected
+          </Badge>
+        );
       default:
-        return <Badge className="bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-50 font-semibold">Pending Review</Badge>;
+        return (
+          <Badge className="bg-gradient-to-r from-amber-50 to-yellow-100 text-amber-800 border border-amber-300 hover:bg-amber-50 font-semibold px-3 py-1 shadow-sm animate-pulse">
+            <Clock className="h-3.5 w-3.5 mr-1.5 inline-block" />
+            Pending Review
+          </Badge>
+        );
     }
   };
 
@@ -276,8 +299,17 @@ export default function SubmissionsPage({
           const isLiquidation =
             (selectedSubmission.activity_title || '').toLowerCase().includes('liquidation');
 
-          const today = new Date();
-          const newDeadline = addWorkingDays(today, 3);
+          // Get the original deadline and add 3 days to it
+          const deadlineField = isAccomplishment ? 'accomplishment_deadline' : 'liquidation_deadline';
+          const overrideField = isAccomplishment ? 'accomplishment_deadline_override' : 'liquidation_deadline_override';
+          const originalDeadlineStr = eventData[overrideField] || eventData[deadlineField];
+          const originalDeadline = originalDeadlineStr ? new Date(originalDeadlineStr) : new Date();
+          // Guard against invalid date
+          if (isNaN(originalDeadline.getTime())) {
+            console.warn(`Invalid deadline value for field "${deadlineField}":`, originalDeadlineStr);
+          }
+          const validDeadline = isNaN(originalDeadline.getTime()) ? new Date() : originalDeadline;
+          const newDeadline = addWorkingDays(validDeadline, 3);
           const newDeadlineString = newDeadline.toISOString().split('T')[0];
 
           const updateData: Record<string, string> = {};
@@ -309,7 +341,7 @@ export default function SubmissionsPage({
             action_description: `Approved`,
             coa_action: 'Approved',
             performed_by: orgShortName,
-            submission_id: selectedSubmission.id,
+            submission_id: selectedSubmission.id.toString(),
           });
 
         }
@@ -401,6 +433,7 @@ export default function SubmissionsPage({
           status: 'Approved',
           approved_by: orgShortName,
           submitted_to: orgShortName,
+          coa_reviewed: false,
         })
         .eq('id', selectedSubmission.id);
 
@@ -682,7 +715,7 @@ export default function SubmissionsPage({
   };
 
   const renderDialogs = () => (
-    <>
+    <div>
       {/* Submission Detail Dialog */}
       <Dialog open={isDetailDialogOpen} onOpenChange={setIsDetailDialogOpen}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -1248,83 +1281,89 @@ export default function SubmissionsPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+
+      {/* Main content */}
+      {renderContent()}
+    </div>
   );
 
-  const renderContent = () => (
-    <>
-      {/* Header */}
-      <div className="mb-8">
-        <h2 className="text-2xl lg:text-4xl font-bold" style={{ color: "#0c3b2e" }}>
-          Submissions
-        </h2>
-        <p className="text-gray-600 mt-2">
-          {orgShortName === "COA" 
-            ? "Review and manage all submitted Accomplishment and Liquidation Reports"
-            : "Review and manage all submitted requests"}
-        </p>
-      </div>
+  const renderContent = () => {
+    return (
+      <div>
+        {/* Header */}
+        <div className="mb-8">
+          <h2 className="text-2xl lg:text-4xl font-bold" style={{ color: "#0c3b2e" }}>
+            Submissions
+          </h2>
+          <p className="text-gray-600 mt-2">
+            {orgShortName === "COA"
+              ? "Review and manage all submitted Accomplishment and Liquidation Reports"
+              : "Review and manage all submitted requests"}
+          </p>
+        </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
-        <Card className="p-4 border-l-4 border-l-[#003b27]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Total Submissions</p>
-              <p className="text-2xl font-bold text-[#003b27]">{submissions.length}</p>
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+          <Card className="p-4 border-l-4 border-l-[#003b27]">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Total Submissions</p>
+                <p className="text-2xl font-bold text-[#003b27]">{submissions.length}</p>
+              </div>
+              <FileText className="h-8 w-8 text-[#003b27] opacity-50" />
             </div>
-            <FileText className="h-8 w-8 text-[#003b27] opacity-50" />
-          </div>
-        </Card>
-        <Card className="p-4 border-l-4 border-l-red-500">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Declined</p>
-              <p className="text-2xl font-bold text-red-600">
-                {submissions.filter(s => s.status === 'Rejected').length}
-              </p>
+          </Card>
+          <Card className="p-4 border-l-4 border-l-red-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Declined</p>
+                <p className="text-2xl font-bold text-red-600">
+                  {submissions.filter((s) => s.status === "Rejected").length}
+                </p>
+              </div>
+              <X className="h-8 w-8 text-red-500 opacity-50" />
             </div>
-            <X className="h-8 w-8 text-red-500 opacity-50" />
-          </div>
-        </Card>
-        <Card className="p-4 border-l-4 border-l-yellow-500">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Pending</p>
-              <p className="text-2xl font-bold text-yellow-600">
-                {submissions.filter(s => s.status === 'Pending').length}
-              </p>
-            </div>
-            <Clock className="h-8 w-8 text-yellow-500 opacity-50" />
-          </div>
-        </Card>
-        <Card className="p-4 border-l-4 border-l-green-500">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">Approved</p>
-              <p className="text-2xl font-bold text-green-600">
-                {submissions.filter(s => s.status === 'Approved').length}
-              </p>
-            </div>
-            <Target className="h-8 w-8 text-green-500 opacity-50" />
-          </div>
-        </Card>
-        <Card className="p-4 border-l-4 border-l-orange-500">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500">For Revision</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {submissions.filter(s => s.status === 'For Revision').length}
-              </p>
-            </div>
-            <AlertTriangle className="h-8 w-8 text-orange-500 opacity-50" />
-          </div>
-        </Card>
-      </div>
+          </Card>
 
-      {/* Tabs for Submission Types */}
-      {!hideNavButtons && (
-      <Tabs value={activeSubmissionTab || "Request to Conduct Activity"} onValueChange={setActiveSubmissionTab} className="w-full">
+          <Card className="p-4 border-l-4 border-l-yellow-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Pending</p>
+                <p className="text-2xl font-bold text-yellow-600">
+                  {submissions.filter((s) => s.status === "Pending").length}
+                </p>
+              </div>
+              <Clock className="h-8 w-8 text-yellow-500 opacity-50" />
+            </div>
+          </Card>
+
+          <Card className="p-4 border-l-4 border-l-green-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">Approved</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {submissions.filter((s) => s.status === "Approved").length}
+                </p>
+              </div>
+              <Target className="h-8 w-8 text-green-500 opacity-50" />
+            </div>
+          </Card>
+          <Card className="p-4 border-l-4 border-l-orange-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500">For Revision</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {submissions.filter((s) => s.status === "For Revision").length}
+                </p>
+              </div>
+              <AlertTriangle className="h-8 w-8 text-orange-500 opacity-50" />
+            </div>
+          </Card>
+        </div>
+
+        {/* Tabs for Submission Types */}
+        {!hideNavButtons && (
+          <Tabs value={activeSubmissionTab || "Request to Conduct Activity"} onValueChange={setActiveSubmissionTab} className="w-full">
         <TabsList className={`grid w-full ${orgShortName === 'COA' ? 'grid-cols-3' : 'grid-cols-4'} mb-6 bg-gray-100`}>
           {submissionTypes.map((type) => (
             <TabsTrigger 
@@ -1353,17 +1392,33 @@ export default function SubmissionsPage({
                 </Card>
               ) : (
                 <div className="space-y-4">
-                  {typeSubmissions.map((submission) => (
+                  {typeSubmissions.map((submission) => {
+                    const isLetterOfAppeal = submission.submission_type === 'Letter of Appeal';
+                    const isApproved = submission.status === 'Approved';
+                    
+                    return (
                     <Card 
                       key={submission.id} 
-                      className="p-6 hover:shadow-lg transition-all duration-200 border-l-4 border-l-[#003b27]"
+                      className={`p-6 hover:shadow-xl transition-all duration-300 border-l-4 ${
+                        isLetterOfAppeal && isApproved 
+                          ? 'border-l-emerald-500 bg-gradient-to-r from-emerald-50/30 via-white to-white' 
+                          : 'border-l-[#003b27]'
+                      }`}
                     >
                       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                         {/* Left Section - Main Info */}
                         <div className="flex-1">
                           <div className="flex items-start gap-3">
-                            <div className="p-2 rounded-lg bg-[#003b27]/10">
-                              <FileText className="h-5 w-5 text-[#003b27]" />
+                            <div className={`p-2 rounded-lg ${
+                              isLetterOfAppeal && isApproved 
+                                ? 'bg-emerald-100' 
+                                : 'bg-[#003b27]/10'
+                            }`}>
+                              <FileText className={`h-5 w-5 ${
+                                isLetterOfAppeal && isApproved 
+                                  ? 'text-emerald-700' 
+                                  : 'text-[#003b27]'
+                              }`} />
                             </div>
                             <div className="flex-1">
                               <h3 className="font-bold text-lg text-gray-800">
@@ -1415,7 +1470,11 @@ export default function SubmissionsPage({
                             variant="outline"
                             size="sm"
                             onClick={() => handleViewDetails(submission)}
-                            className="border-[#003b27] text-[#003b27] hover:bg-[#003b27] hover:text-white"
+                            className={`border-[#003b27] hover:bg-[#003b27] hover:text-white transition-all ${
+                              isLetterOfAppeal && isApproved
+                                ? 'text-emerald-700 border-emerald-600 hover:bg-emerald-700 hover:border-emerald-700'
+                                : 'text-[#003b27]'
+                            }`}
                           >
                             <Eye className="h-4 w-4 mr-1" />
                             {submission.submission_type === 'Letter of Appeal' && submission.status === 'Pending' 
@@ -1425,7 +1484,8 @@ export default function SubmissionsPage({
                         </div>
                       </div>
                     </Card>
-                  ))}
+                  );
+                })}
                 </div>
               )}
             </TabsContent>
@@ -1772,8 +1832,9 @@ export default function SubmissionsPage({
 
 
       {renderDialogs()}
-    </>
-  );
+    </div>
+    );
+  };
 
   // If embedded (used inside another dashboard), just return the content
   if (isEmbedded) {

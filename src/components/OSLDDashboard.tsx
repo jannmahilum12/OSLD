@@ -5053,8 +5053,7 @@ ${deadlineInfo}`;
 
   // DEFAULT DASHBOARD VIEW
   return (
-    <>
-      <div className="flex flex-col lg:flex-row h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+    <div className="flex flex-col lg:flex-row h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Notification */}
       {showNotification && (
         <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-top">
@@ -6596,7 +6595,5 @@ ${deadlineInfo}`;
         </DialogContent>
       </Dialog>
     </div>
-    </>
   );
-
-export default OSLDDashboard;
+}
