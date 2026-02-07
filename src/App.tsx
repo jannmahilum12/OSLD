@@ -1,10 +1,11 @@
-import { Suspense } from "react";
+import { Suspense, lazy } from "react";
 import { Routes, Route } from "react-router-dom";
 import Home from "./components/home";
 import LoginPage from "./components/LoginPage";
-import OSLDDashboard from "./components/OSLDDashboard";
-import AODashboard from "./components/AODashboard";
 import { Toaster } from "./components/ui/toaster";
+
+const OSLDDashboard = lazy(() => import("./components/OSLDDashboard"));
+const AODashboard = lazy(() => import("./components/AODashboard"));
 
 function App() {
   return (

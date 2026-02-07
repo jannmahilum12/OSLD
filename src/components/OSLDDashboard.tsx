@@ -159,37 +159,39 @@ const OSLDDeadlineNotification = ({
       : 'A Letter of Appeal has been submitted and requires your review.';
     
     return (
-      <div className="mt-3 bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="mt-3 bg-white rounded-lg shadow-sm border border-gray-300 overflow-hidden">
         {/* Left border accent */}
         <div className="flex">
-          <div className="w-1 bg-amber-500" />
+          <div className="w-1 bg-gray-400" />
           
           <div className="flex-1 p-4">
-            {/* Action Required Header */}
-            <div className="flex items-start gap-3 mb-4">
-              <div className="w-10 h-10 rounded-lg border-2 border-amber-500 flex items-center justify-center bg-amber-50">
-                <FileText className="w-5 h-5 text-amber-600" />
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center">
+                <FileText className="w-5 h-5 text-gray-700" />
               </div>
-              <div>
-                <h4 className="text-sm font-bold uppercase tracking-wide" style={{ color: "#003b27" }}>
+              <div className="flex-1">
+                <h4 className="text-sm font-bold uppercase tracking-wide text-gray-900">
                   Appeal Submitted
                 </h4>
                 <p className="text-xs text-gray-500">Pending Your Review</p>
               </div>
             </div>
             
-            {/* Content Card */}
-            <div className="bg-gray-50 rounded-lg p-3 mb-4">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs text-gray-500 uppercase">Submitted by:</span>
-                <span className="text-xs font-bold px-2 py-1 rounded bg-amber-100 text-amber-800">
+            {/* Submitted By Badge */}
+            <div className="mb-3">
+              <div className="inline-flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded border border-gray-200">
+                <span className="text-xs font-semibold text-gray-600 uppercase">Submitted By:</span>
+                <span className="text-xs font-bold text-gray-700">
                   {orgNameMap[targetOrg] || targetOrg || 'Organization'}
                 </span>
               </div>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                {appealMessage}
-              </p>
             </div>
+
+            {/* Message */}
+            <p className="text-sm text-gray-600 leading-relaxed mb-4">
+              {appealMessage}
+            </p>
             
             {/* Review Button */}
             {targetOrg !== 'AO' && targetOrg !== 'LSG' && (
@@ -199,7 +201,7 @@ const OSLDDeadlineNotification = ({
                   setActiveSubmissionTab?.("Letter of Appeal");
                   setActiveNav?.("Submissions");
                 }}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-white font-semibold text-sm transition-all hover:opacity-90"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-white font-semibold text-sm transition-all hover:opacity-90"
                 style={{ backgroundColor: "#003b27" }}
               >
                 <FileText className="w-4 h-4" />
@@ -2454,7 +2456,7 @@ ${deadlineInfo}`;
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="h-auto p-0 text-blue-600 hover:text-blue-700 hover:bg-transparent"
+                                        className="h-auto p-0 text-gray-700 hover:text-blue-700 hover:bg-transparent"
                                         onClick={() => window.open(docs.accomplishment.fileUrl, '_blank')}
                                       >
                                         <FileText className="h-4 w-4 mr-1" />
@@ -2469,7 +2471,7 @@ ${deadlineInfo}`;
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="h-auto p-0 text-blue-600 hover:text-blue-700 hover:bg-transparent"
+                                        className="h-auto p-0 text-gray-700 hover:text-blue-700 hover:bg-transparent"
                                         onClick={() => window.open(docs.liquidation.fileUrl, '_blank')}
                                       >
                                         <FileText className="h-4 w-4 mr-1" />
@@ -2847,7 +2849,7 @@ ${deadlineInfo}`;
                                                                       <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                                                                        className="flex items-center gap-1 text-gray-700 hover:text-blue-700"
                                                                         onClick={() => {
                                                                           setSelectedActivityLog(docs.accomplishment);
                                                                           setIsActivityLogDetailOpen(true);
@@ -2865,7 +2867,7 @@ ${deadlineInfo}`;
                                                                       <Button
                                                                         variant="ghost"
                                                                         size="sm"
-                                                                        className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                                                                        className="flex items-center gap-1 text-gray-700 hover:text-blue-700"
                                                                         onClick={() => {
                                                                           setSelectedActivityLog(docs.liquidation);
                                                                           setIsActivityLogDetailOpen(true);
@@ -3502,7 +3504,7 @@ ${deadlineInfo}`;
                         href={platforms.facebook}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline"
+                        className="text-gray-700 hover:underline"
                       >
                         {platforms.facebook}
                       </a>
@@ -4517,7 +4519,7 @@ ${deadlineInfo}`;
                         <p className="text-sm font-medium text-gray-700">Uploaded:</p>
                         {uploadedMemorandums.map((doc) => (
                           <div key={doc.id} className="flex items-center justify-between p-2 bg-blue-50 rounded">
-                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">
+                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-gray-700 hover:underline">
                               📄 {doc.file_name}
                             </a>
                             <button
@@ -4577,7 +4579,7 @@ ${deadlineInfo}`;
                         <p className="text-sm font-medium text-gray-700">Uploaded:</p>
                         {uploadedAnnouncements.map((doc) => (
                           <div key={doc.id} className="flex items-center justify-between p-2 bg-blue-50 rounded">
-                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">
+                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-gray-700 hover:underline">
                               📄 {doc.file_name}
                             </a>
                             <button
@@ -4637,7 +4639,7 @@ ${deadlineInfo}`;
                         <p className="text-sm font-medium text-gray-700">Uploaded:</p>
                         {uploadedFunctionalCharts.map((doc) => (
                           <div key={doc.id} className="flex items-center justify-between p-2 bg-blue-50 rounded">
-                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">
+                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-gray-700 hover:underline">
                               📄 {doc.file_name}
                             </a>
                             <button
@@ -5197,7 +5199,7 @@ ${deadlineInfo}`;
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="text-xs text-blue-600 hover:text-blue-800 h-7 px-2"
+                          className="text-xs text-gray-700 hover:text-blue-800 h-7 px-2"
                           onClick={async () => {
                             const unreadNotifs = notifications.filter(n => !n.isRead);
                             for (const notif of unreadNotifs) {
@@ -5269,7 +5271,7 @@ ${deadlineInfo}`;
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="text-xs text-blue-600 hover:text-blue-800 h-6 px-2"
+                                  className="text-xs text-gray-700 hover:text-blue-800 h-6 px-2"
                                   onClick={async () => {
                                     await supabase
                                       .from('notification_read_status')
@@ -5807,7 +5809,7 @@ ${deadlineInfo}`;
                       <Calendar className="h-5 w-5 text-white" />
                     </div>
                     <div>
-                      <h4 className="font-bold text-base text-blue-600">Events by Organization</h4>
+                      <h4 className="font-bold text-base text-gray-700">Events by Organization</h4>
                       <p className="text-xs text-gray-500">Total: {Object.values(analyticsData.eventsPerOrg).reduce((a, b) => a + b, 0)}</p>
                     </div>
                   </div>
@@ -5819,11 +5821,11 @@ ${deadlineInfo}`;
                         .sort((a, b) => b[1] - a[1])
                         .map(([org, count], index) => (
                           <div key={org} className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
-                            <div className="w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold">
+                            <div className="w-6 h-6 rounded-full bg-gray-400 text-white flex items-center justify-center text-xs font-bold">
                               {index + 1}
                             </div>
                             <span className="flex-1 text-sm font-medium text-gray-700 truncate">{org}</span>
-                            <span className="text-lg font-bold text-blue-600">{count}</span>
+                            <span className="text-lg font-bold text-gray-700">{count}</span>
                           </div>
                         ))
                     )}

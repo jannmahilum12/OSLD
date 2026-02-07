@@ -111,7 +111,8 @@ export default function SubmissionsPage({
   }, [orgShortName]);
 
   const loadSubmissions = async () => {
-    let query = supabase.from('submissions').select('*');
+    // Note: We use select('*') instead of joining osld_events because there's no FK constraint.
+    // The activity_due_title is fetched separately in handleViewDetails when needed.
     
     // Filter by submitted_to field to show only submissions directed to this org
     // NEW ROUTING:
@@ -120,26 +121,58 @@ export default function SubmissionsPage({
     // - COA receives Accomplishment, Liquidation, and Letter of Appeal from USG, LCO, GSC, USED, TGP
     // - OSLD receives Request to Conduct Activity from all orgs
     if (orgShortName === 'LCO') {
-      query = query.eq('submitted_to', 'LCO');
+      // LCO sees submissions sent TO them (from AO) + their OWN submissions (sent to COA/OSLD)
+      const { data, error } = await supabase
+        .from('submissions')
+        .select('*')
+        .or(`submitted_to.eq.LCO,organization.eq.LCO`)
+        .order('submitted_at', { ascending: false });
+      if (error) { console.error('Error loading submissions:', error); return; }
+      setSubmissions(data || []);
+      return;
     } else if (orgShortName === 'USG') {
-      query = query.eq('submitted_to', 'USG');
+      // USG sees submissions sent TO them (from LSG) + their OWN submissions (sent to COA/OSLD)
+      const { data, error } = await supabase
+        .from('submissions')
+        .select('*')
+        .or(`submitted_to.eq.USG,organization.eq.USG`)
+        .order('submitted_at', { ascending: false });
+      if (error) { console.error('Error loading submissions:', error); return; }
+      setSubmissions(data || []);
+      return;
     } else if (orgShortName === 'OSLD') {
-      query = query.eq('submitted_to', 'OSLD');
+      const { data, error } = await supabase
+        .from('submissions')
+        .select('*')
+        .eq('submitted_to', 'OSLD')
+        .order('submitted_at', { ascending: false });
+      if (error) { console.error('Error loading submissions:', error); return; }
+      setSubmissions(data || []);
+      return;
     } else if (orgShortName === 'COA') {
       // COA sees all submissions sent to them for stats, but filters by status in tabs
       // Load all statuses: Pending, For Revision, Approved, Rejected
-      query = query.eq('submitted_to', 'COA')
-                   .in('submission_type', ['Accomplishment Report', 'Liquidation Report', 'Letter of Appeal']);
-    }
-
-    const { data, error } = await query.order('submitted_at', { ascending: false });
-
-    if (error) {
-      console.error('Error loading submissions:', error);
+      const { data, error } = await supabase
+        .from('submissions')
+        .select('*')
+        .eq('submitted_to', 'COA')
+        .in('submission_type', ['Accomplishment Report', 'Liquidation Report', 'Letter of Appeal'])
+        .order('submitted_at', { ascending: false });
+      if (error) { console.error('Error loading submissions:', error); return; }
+      setSubmissions(data || []);
+      return;
+    } else {
+      // For submitting orgs (AO, LSG, GSC, USED, TGP):
+      // Show their OWN submissions so they can see the status of what they submitted
+      const { data, error } = await supabase
+        .from('submissions')
+        .select('*')
+        .eq('organization', orgShortName)
+        .order('submitted_at', { ascending: false });
+      if (error) { console.error('Error loading submissions:', error); return; }
+      setSubmissions(data || []);
       return;
     }
-
-    setSubmissions(data || []);
   };
 
   const handleLogout = () => {
@@ -176,9 +209,18 @@ export default function SubmissionsPage({
     : ["Request to Conduct Activity", "Accomplishment Report", "Liquidation Report", "Letter of Appeal"];
 
   const getSubmissionsByType = (type: string) => {
-    // All orgs (including COA) only see Pending submissions in the Submissions sidebar
-    // After COA approves → submission goes to the SUBMITTING org's Audit Files > Pending Review
-    return submissions.filter(s => s.submission_type === type && s.status === 'Pending');
+    // For Letter of Appeal: show all statuses so orgs can track their appeal status
+    // COA sees appeals sent to them; submitting orgs see their own appeals
+    if (type === 'Letter of Appeal') {
+      return submissions.filter(s => s.submission_type === type);
+    }
+    // For reviewing orgs (LCO, USG, OSLD, COA): show only Pending submissions
+    // For submitting orgs: show only Pending to avoid showing already-processed items
+    if (['LCO', 'USG', 'OSLD', 'COA'].includes(orgShortName)) {
+      return submissions.filter(s => s.submission_type === type && s.status === 'Pending');
+    }
+    // For submitting orgs (AO, LSG, GSC, USED, TGP): show all their own submissions
+    return submissions.filter(s => s.submission_type === type);
   };
 
   const getStatusBadge = (status: string) => {
@@ -258,6 +300,18 @@ export default function SubmissionsPage({
             created_by: orgShortName,
             target_org: selectedSubmission.organization,
           });
+
+
+          // Log Letter of Appeal Approval to activity_logs
+          await supabase.from('activity_logs').insert({
+            organization: selectedSubmission.organization,
+            action_type: 'Letter of Appeal',
+            action_description: `Approved`,
+            coa_action: 'Approved',
+            performed_by: orgShortName,
+            submission_id: selectedSubmission.id,
+          });
+
         }
       } else {
         await supabase.from('notifications').insert({
@@ -267,6 +321,7 @@ export default function SubmissionsPage({
           created_by: orgShortName,
           target_org: selectedSubmission.organization,
         });
+
 
         if (orgShortName === 'LCO' || orgShortName === 'USG') {
           if (selectedSubmission.submission_type === 'Accomplishment Report') {
@@ -288,6 +343,7 @@ export default function SubmissionsPage({
                 created_by: orgShortName,
                 target_org: 'COA',
               });
+
             }
           } else if (selectedSubmission.submission_type === 'Liquidation Report') {
             const { error: endorseError } = await supabase
@@ -308,6 +364,7 @@ export default function SubmissionsPage({
                 created_by: orgShortName,
                 target_org: 'COA',
               });
+
             }
           }
         }
@@ -330,6 +387,7 @@ export default function SubmissionsPage({
           title: 'Submission Approved',
           description: `"${selectedSubmission.activity_title}" has been approved and moved to Audit Files.`,
         });
+
 
         setIsDetailDialogOpen(false);
         loadSubmissions();
@@ -366,6 +424,7 @@ export default function SubmissionsPage({
         description: `"${selectedSubmission.activity_title}" has been approved successfully.`,
       });
 
+
       setIsDetailDialogOpen(false);
       loadSubmissions();
       onActivityChange?.();
@@ -376,6 +435,7 @@ export default function SubmissionsPage({
         description: 'Failed to approve submission. Please try again.',
         variant: 'destructive',
       });
+
     }
   };
 
@@ -435,6 +495,7 @@ export default function SubmissionsPage({
         target_org: selectedSubmission.organization
       });
 
+
     toast({
       title: "Submission Rejected",
       description: `"${selectedSubmission.activity_title}" has been rejected.`,
@@ -491,6 +552,7 @@ export default function SubmissionsPage({
         target_org: selectedSubmission.organization
       });
 
+
     toast({
       title: "Submission Declined",
       description: `"${selectedSubmission.activity_title}" has been declined.`,
@@ -529,6 +591,7 @@ export default function SubmissionsPage({
         description: "Please select at least one item or provide additional comments.",
         variant: "destructive",
       });
+
       return;
     }
 
@@ -555,6 +618,7 @@ export default function SubmissionsPage({
         description: "Failed to update submission. Please try again.",
         variant: "destructive",
       });
+
       return;
     }
 
@@ -579,6 +643,7 @@ export default function SubmissionsPage({
         created_by: orgShortName,
         target_org: selectedSubmission.organization
       });
+
 
     toast({
       title: "Revision Required",
@@ -1279,9 +1344,11 @@ export default function SubmissionsPage({
               {typeSubmissions.length === 0 ? (
                 <Card className="p-12 text-center">
                   <FileText className="h-16 w-16 mx-auto text-gray-300 mb-4" />
-                  <p className="text-gray-500 text-lg">No pending submissions</p>
+                  <p className="text-gray-500 text-lg">No submissions found</p>
                   <p className="text-gray-400 text-sm mt-2">
-                    Pending submissions for {type} will appear here
+                    {['LCO', 'USG', 'OSLD', 'COA'].includes(orgShortName) 
+                      ? `Pending submissions for ${type} will appear here`
+                      : `Your ${type} submissions will appear here`}
                   </p>
                 </Card>
               ) : (
@@ -1302,17 +1369,13 @@ export default function SubmissionsPage({
                               <h3 className="font-bold text-lg text-gray-800">
                                 {submission.submission_type === 'Letter of Appeal' 
                                   ? (() => {
-                                      // Extract event title and report type from activity_title
-                                      // Format: "Letter of Appeal - Accomplishment Report" or "Letter of Appeal - Liquidation Report"
-                                      const parts = submission.activity_title.split(' - ');
-                                      if (parts.length >= 2) {
-                                        const reportType = parts[parts.length - 1];
-                                        // Get event title (everything except the report type suffix)
-                                        const eventTitle = parts.slice(0, -1).join(' - ').replace('Letter of Appeal', '').replace(/^[\s-]+/, '').trim();
-                                        const shortReportType = reportType.includes('Accomplishment') ? 'Accomplishment' : 'Liquidation';
-                                        return eventTitle ? `${eventTitle} - ${shortReportType}` : submission.activity_title;
-                                      }
-                                      return submission.activity_title;
+                                      const dueTitle = submission.activity_due_title;
+                                      const reportType = submission.activity_title.includes('Liquidation') 
+                                        ? 'Liquidation Report' 
+                                        : 'Accomplishment Report';
+                                      return dueTitle 
+                                        ? `${dueTitle} - ${reportType}`
+                                        : submission.activity_title;
                                     })()
                                   : submission.activity_title}
                               </h3>
@@ -1355,7 +1418,9 @@ export default function SubmissionsPage({
                             className="border-[#003b27] text-[#003b27] hover:bg-[#003b27] hover:text-white"
                           >
                             <Eye className="h-4 w-4 mr-1" />
-                            View Details
+                            {submission.submission_type === 'Letter of Appeal' && submission.status === 'Pending' 
+                              ? 'Review Appeal' 
+                              : 'View Details'}
                           </Button>
                         </div>
                       </div>
@@ -1448,12 +1513,14 @@ export default function SubmissionsPage({
                                   title: "Opinion saved",
                                   description: `Marked as ${value}`,
                                 });
+
                               } catch (error: any) {
                                 toast({
                                   title: "Error",
                                   description: error.message,
                                   variant: "destructive",
                                 });
+
                               }
                             }}
                           >
@@ -1546,12 +1613,14 @@ export default function SubmissionsPage({
                                   title: "Opinion saved",
                                   description: `Marked as ${value}`,
                                 });
+
                               } catch (error: any) {
                                 toast({
                                   title: "Error",
                                   description: error.message,
                                   variant: "destructive",
                                 });
+
                               }
                             }}
                           >
@@ -1661,12 +1730,14 @@ export default function SubmissionsPage({
                                   title: "Opinion saved",
                                   description: `Marked as ${value}`,
                                 });
+
                               } catch (error: any) {
                                 toast({
                                   title: "Error",
                                   description: error.message,
                                   variant: "destructive",
                                 });
+
                               }
                             }}
                           >

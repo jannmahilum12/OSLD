@@ -121,10 +121,12 @@ interface Officer {
 }
 
 // Deadline Appeal Section Component for USG
-const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApproved, onSubmitHere, submissionStatus }: { deadlineType: 'accomplishment' | 'liquidation', eventId: string, targetOrg?: string, appealApproved?: boolean, onSubmitHere?: () => void, submissionStatus?: 'no_submission' | 'pending' | 'pending_review' | 'approved' }) => {
+const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApproved, onSubmitHere, submissionStatus, eventTitle }: { deadlineType: 'accomplishment' | 'liquidation', eventId: string, targetOrg?: string, appealApproved?: boolean, onSubmitHere?: () => void, submissionStatus?: 'no_submission' | 'pending' | 'pending_review' | 'approved', eventTitle?: string }) => {
   const [showAppealForm, setShowAppealForm] = useState(false);
   const [appealFile, setAppealFile] = useState<File | null>(null);
   const [appealSubmitted, setAppealSubmitted] = useState(false);
+  const [appealRejected, setAppealRejected] = useState(false);
+  const [appealRejectionReason, setAppealRejectionReason] = useState<string | null>(null);
   const [targetOrgAppealSubmitted, setTargetOrgAppealSubmitted] = useState(false);
   const { toast } = useToast();
 
@@ -135,14 +137,22 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
     const checkAppealStatus = async () => {
       const { data } = await supabase
         .from('submissions')
-        .select('id')
+        .select('id, status, revision_reason')
         .eq('organization', 'LSG')
         .eq('submission_type', 'Letter of Appeal')
         .ilike('activity_title', `%${reportType}%`)
         .eq('event_id', eventId)
         .limit(1);
       
-      setAppealSubmitted(!!data && data.length > 0);
+      if (data && data.length > 0) {
+        setAppealSubmitted(true);
+        setAppealRejected(data[0].status === 'Rejected');
+        setAppealRejectionReason(data[0].revision_reason || null);
+      } else {
+        setAppealSubmitted(false);
+        setAppealRejected(false);
+        setAppealRejectionReason(null);
+      }
     };
     checkAppealStatus();
   }, [eventId, reportType]);
@@ -200,12 +210,12 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
     
     setSubmitting(true);
     try {
-      // USG submits to OSLD
-      const submittedTo = 'OSLD';
+      // LSG submits to USG (matching AO→LCO pattern)
+      const submittedTo = 'USG';
 
       // Upload file to storage
       const fileExt = appealFile.name.split('.').pop();
-      const storagePath = `USG_appeal_${Date.now()}.${fileExt}`;
+      const storagePath = `LSG_appeal_${Date.now()}.${fileExt}`;
       const { error: uploadError, data: uploadData } = await supabase.storage
         .from('submissions')
         .upload(storagePath, appealFile);
@@ -223,7 +233,7 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
         .insert({
           organization: 'LSG',
           submission_type: 'Letter of Appeal',
-          activity_title: `Letter of Appeal - ${reportType} Report`,
+          activity_title: eventTitle ? `${eventTitle} - ${reportType} Report` : `Letter of Appeal - ${reportType} Report`,
           activity_duration: 'N/A',
           activity_venue: 'N/A',
           activity_participants: 'N/A',
@@ -234,19 +244,20 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
           file_url: publicUrl,
           file_name: appealFile.name,
           status: 'Pending',
-          submitted_to: submittedTo
+          submitted_to: submittedTo,
+          event_id: eventId
         });
 
       if (insertError) throw insertError;
 
-      // Send notification to the receiving organization (OSLD)
+      // Send notification to the receiving organization (USG)
       await supabase
         .from('notifications')
         .insert({
           event_id: eventId,
           event_title: `Letter of Appeal Submitted`,
-          event_description: `USG has submitted a Letter of Appeal for ${reportType} Report. Please review it.`,
-          created_by: 'USG',
+          event_description: `LSG has submitted a Letter of Appeal for ${reportType} Report${eventTitle ? ` (${eventTitle})` : ''}. Please review it.`,
+          created_by: 'LSG',
           target_org: submittedTo
         });
 
@@ -344,6 +355,40 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
     );
   }
 
+  // Show when own org's appeal was rejected/declined
+  if (appealRejected && isOwnDeadline) {
+    return (
+      <div className=\"mt-3 p-4 bg-red-50 border border-red-300 rounded-xl shadow-sm\">
+        <div className=\"flex items-center gap-2 mb-3\">
+          <span className=\"px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-red-100 text-red-700 rounded\">
+            Appeal Declined
+          </span>
+        </div>
+        <p className=\"text-sm text-gray-600 leading-relaxed mb-3\">
+          Your appeal for this activity has been declined. {reportType} report must be submitted before the original deadline.
+        </p>
+        {appealRejectionReason && (
+          <div className=\"bg-white border border-red-200 rounded p-3 mb-3\">
+            <p className=\"text-xs font-semibold text-red-700 mb-1\">Reason for Decline:</p>
+            <p className=\"text-xs text-gray-700 whitespace-pre-wrap\">{appealRejectionReason}</p>
+          </div>
+        )}
+        {isOwnDeadline && (
+          <div className=\"pt-3 border-t border-red-200\">
+            <Button
+              size=\"sm\"
+              onClick={() => setShowAppealForm(true)}
+              className=\"w-full px-4 py-1.5 text-xs font-semibold rounded-lg\"
+              style={{ borderColor: \"#003b27\", color: \"#003b27\", border: \"2px solid #003b27\", backgroundColor: \"white\" }}
+            >
+              Submit Another Appeal
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // Show when own org (USG) has submitted an appeal
   if (appealSubmitted && isOwnDeadline) {
     // Check if appeal was approved (has override)
@@ -408,7 +453,7 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
               </span>
             </div>
           )}
-          {canSubmitAppeal && onSubmitHere && submissionStatus !== 'approved' && (
+          {canSubmitAppeal && onSubmitHere && submissionStatus !== 'approved' && !appealRejected && (
             <Button
               onClick={onSubmitHere}
               className="w-full mt-3 text-sm font-semibold rounded-lg hover:shadow-md transition-all"
@@ -419,7 +464,7 @@ const DeadlineAppealSection = ({ deadlineType, eventId, targetOrg, appealApprove
           )}
         </div>
         <div className="mt-3 pt-3 border-t border-red-200">
-          {canSubmitAppeal ? (
+          {canSubmitAppeal && !appealRejected ? (
             <div className="space-y-2">
               <p className="text-xs font-semibold text-gray-700">Want to file Letter of Appeal?</p>
               <div className="flex gap-2">
