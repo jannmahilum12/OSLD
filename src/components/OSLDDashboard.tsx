@@ -6598,4 +6598,5 @@ ${deadlineInfo}`;
     </div>
     </>
   );
-}
+
+export default OSLDDashboard;
