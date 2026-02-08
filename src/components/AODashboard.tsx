@@ -728,11 +728,11 @@ function AODashboard({
             // Mark as pending if:
             // - It's the current org's OWN submission (Pending status)
             // - OR it's a submission by the target org that this org monitors (LCO monitors AO, USG monitors LSG)
-            // - OR for COA/OSLD: any AO/LSG submission should show as pending (monitoring)
+            // - OR for COA/OSLD: submission is from the event's target org (AO/LSG)
             const hasPendingAccom = accomSubmission?.status === 'Pending' && 
               (accomSubmission?.organization === orgShortName || 
                accomSubmission?.organization === e.target_organization ||
-               ((orgShortName === 'COA' || orgShortName === 'OSLD') && (accomSubmission?.organization === 'AO' || accomSubmission?.organization === 'LSG')));
+               ((orgShortName === 'COA' || orgShortName === 'OSLD') && accomSubmission?.organization === e.target_organization));
 
             const liqSubmission = submissionsData?.find(
               (s) =>
@@ -743,11 +743,11 @@ function AODashboard({
             // Mark as pending if:
             // - It's the current org's OWN submission (Pending status)
             // - OR it's a submission by the target org that this org monitors (LCO monitors AO, USG monitors LSG)
-            // - OR for COA/OSLD: any AO/LSG submission should show as pending (monitoring)
+            // - OR for COA/OSLD: submission is from the event's target org (AO/LSG)
             const hasPendingLiq = liqSubmission?.status === 'Pending' && 
               (liqSubmission?.organization === orgShortName || 
                liqSubmission?.organization === e.target_organization ||
-               ((orgShortName === 'COA' || orgShortName === 'OSLD') && (liqSubmission?.organization === 'AO' || liqSubmission?.organization === 'LSG')));
+               ((orgShortName === 'COA' || orgShortName === 'OSLD') && liqSubmission?.organization === e.target_organization));
 
             if (e.require_accomplishment && !hasApprovedAccom) {
               const accomDeadlineDate =
