@@ -292,36 +292,140 @@ export default function SubmissionsPage({
             return result;
           };
 
-          const isAccomplishment =
-            (selectedSubmission.activity_title || '')
-              .toLowerCase()
-              .includes('accomplishment');
-          const isLiquidation =
-            (selectedSubmission.activity_title || '').toLowerCase().includes('liquidation');
+          // Determine if this appeal is for accomplishment or liquidation
+          // PRIMARY: Parse from the appeal's activity_title (e.g., "Event Title - Accomplishment Report")
+          // FALLBACK: Check if a matching submission exists in the list
+          const appealTitle = (selectedSubmission.activity_title || '').toLowerCase();
+          let isAccomplishment = appealTitle.includes('accomplishment');
+          let isLiquidation = appealTitle.includes('liquidation');
 
-          // Get the original deadline and add 3 days to it
+          // Fallback: If the activity_title doesn't contain the type, check existing submissions
+          if (!isAccomplishment && !isLiquidation) {
+            const accomSubmission = submissions.find(s => 
+              (s.event_id === selectedSubmission.event_id || s.activity_title === selectedSubmission.activity_title) &&
+              s.submission_type === 'Accomplishment Report'
+            );
+            const liqSubmission = submissions.find(s => 
+              (s.event_id === selectedSubmission.event_id || s.activity_title === selectedSubmission.activity_title) &&
+              s.submission_type === 'Liquidation Report'
+            );
+            isAccomplishment = !!accomSubmission;
+            isLiquidation = !!liqSubmission;
+          }
+
+          // Last resort fallback: check which deadline fields exist on the event
+          if (!isAccomplishment && !isLiquidation) {
+            if (eventData.accomplishment_deadline && !eventData.accomplishment_deadline_override) {
+              isAccomplishment = true;
+            } else if (eventData.liquidation_deadline && !eventData.liquidation_deadline_override) {
+              isLiquidation = true;
+            } else if (eventData.accomplishment_deadline) {
+              isAccomplishment = true;
+            } else {
+              isLiquidation = true;
+            }
+            console.warn('Could not determine appeal type from title or submissions, fell back to event deadline fields. isAccomplishment:', isAccomplishment, 'isLiquidation:', isLiquidation);
+          }
+
+          // Extend deadline by 3 calendar days from the ORIGINAL deadline
           const deadlineField = isAccomplishment ? 'accomplishment_deadline' : 'liquidation_deadline';
           const overrideField = isAccomplishment ? 'accomplishment_deadline_override' : 'liquidation_deadline_override';
-          const originalDeadlineStr = eventData[overrideField] || eventData[deadlineField];
-          const originalDeadline = originalDeadlineStr ? new Date(originalDeadlineStr) : new Date();
-          // Guard against invalid date
-          if (isNaN(originalDeadline.getTime())) {
-            console.warn(`Invalid deadline value for field "${deadlineField}":`, originalDeadlineStr);
+          const originalDeadlineStr = eventData[deadlineField];
+
+          let resolvedDeadlineStr = originalDeadlineStr;
+
+          // If the deadline field is null, compute it on-the-fly from end_date
+          if (!resolvedDeadlineStr && eventData.end_date) {
+            console.warn('Deadline field is null, computing from end_date:', {
+              deadlineField,
+              end_date: eventData.end_date,
+              isAccomplishment,
+              isLiquidation,
+            });
+            const endDate = new Date(eventData.end_date);
+            // Accomplishment: 3 working days after end_date
+            // Liquidation: 7 working days after end_date
+            const workingDaysToAdd = isAccomplishment ? 3 : 7;
+            const computedDeadline = addWorkingDays(endDate, workingDaysToAdd);
+            resolvedDeadlineStr = computedDeadline.toISOString().split('T')[0];
+
+            // Also backfill the missing deadline in the database so it's set for next time
+            const backfillData: Record<string, string> = {};
+            backfillData[deadlineField] = resolvedDeadlineStr;
+            await supabase
+              .from('osld_events')
+              .update(backfillData)
+              .eq('id', selectedSubmission.event_id);
+            console.log('Backfilled missing deadline:', backfillData);
           }
-          const validDeadline = isNaN(originalDeadline.getTime()) ? new Date() : originalDeadline;
-          const newDeadline = addWorkingDays(validDeadline, 3);
+
+          if (!resolvedDeadlineStr) {
+            console.error('Cannot extend deadline - original deadline is null and end_date is missing:', {
+              deadlineField,
+              isAccomplishment,
+              isLiquidation,
+              eventData,
+            });
+            alert('Error: Could not find original deadline for this appeal. The event may be missing its end date.');
+            return;
+          }
+
+          // Add 3 working days to the original deadline (skip weekends)
+          const originalDeadline = new Date(resolvedDeadlineStr);
+          const newDeadline = new Date(originalDeadline);
+          
+          let workingDaysAdded = 0;
+          while (workingDaysAdded < 3) {
+            newDeadline.setDate(newDeadline.getDate() + 1);
+            const dayOfWeek = newDeadline.getDay();
+            // Skip Saturdays (6) and Sundays (0)
+            if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+              workingDaysAdded++;
+            }
+          }
+          
           const newDeadlineString = newDeadline.toISOString().split('T')[0];
 
+          // Always write the override - isAccomplishment or isLiquidation is guaranteed true by fallback logic above
           const updateData: Record<string, string> = {};
           if (isAccomplishment) updateData.accomplishment_deadline_override = newDeadlineString;
           else if (isLiquidation) updateData.liquidation_deadline_override = newDeadlineString;
 
+          console.log('Appeal approval - writing deadline override:', {
+            eventId: selectedSubmission.event_id,
+            isAccomplishment,
+            isLiquidation,
+            originalDeadline: resolvedDeadlineStr,
+            wasComputed: !originalDeadlineStr,
+            newDeadline: newDeadlineString,
+            workingDaysExtended: 3,
+            updateData,
+          });
+
           if (Object.keys(updateData).length > 0) {
-            await supabase
+            const { error: overrideError } = await supabase
               .from('osld_events')
               .update(updateData)
               .eq('id', selectedSubmission.event_id);
+            
+            if (overrideError) {
+              console.error('Failed to write deadline override:', overrideError);
+              throw overrideError;
+            }
+          } else {
+            console.error('WARNING: updateData is empty - no deadline override written! This should not happen.');
           }
+
+          // UPDATE the Letter of Appeal submission status to 'Approved'
+          const { error: appealUpdateError } = await supabase
+            .from('submissions')
+            .update({
+              status: 'Approved',
+              approved_by: orgShortName,
+            })
+            .eq('id', selectedSubmission.id);
+
+          if (appealUpdateError) throw appealUpdateError;
 
           const reportType = isAccomplishment ? 'accomplishment' : 'liquidation';
 
@@ -345,7 +449,18 @@ export default function SubmissionsPage({
           });
 
         }
+
+        toast({
+          title: 'Appeal Approved',
+          description: `Letter of Appeal for "${selectedSubmission.activity_title}" has been approved. Deadline extended by 3 working days.`,
+        });
+
+        setIsDetailDialogOpen(false);
+        loadSubmissions();
+        onActivityChange?.();
+        return;
       } else {
+        // Send notification to the submitting organization
         await supabase.from('notifications').insert({
           event_id: selectedSubmission.id,
           event_title: `${selectedSubmission.submission_type} Approved`,
@@ -354,9 +469,12 @@ export default function SubmissionsPage({
           target_org: selectedSubmission.organization,
         });
 
-
+        // LCO/USG: Endorse Accomplishment/Liquidation Reports to COA
         if (orgShortName === 'LCO' || orgShortName === 'USG') {
-          if (selectedSubmission.submission_type === 'Accomplishment Report') {
+          if (
+            selectedSubmission.submission_type === 'Accomplishment Report' ||
+            selectedSubmission.submission_type === 'Liquidation Report'
+          ) {
             const { error: endorseError } = await supabase
               .from('submissions')
               .update({
@@ -367,49 +485,60 @@ export default function SubmissionsPage({
               })
               .eq('id', selectedSubmission.id);
 
-            if (!endorseError) {
-              await supabase.from('notifications').insert({
-                event_id: selectedSubmission.id,
-                event_title: `Accomplishment Report Endorsed from ${orgShortName}`,
-                event_description: `${orgShortName} has endorsed an Accomplishment Report titled "${selectedSubmission.activity_title}" from ${selectedSubmission.organization} to COA for review.`,
-                created_by: orgShortName,
-                target_org: 'COA',
-              });
+            if (endorseError) throw endorseError;
 
-            }
-          } else if (selectedSubmission.submission_type === 'Liquidation Report') {
-            const { error: endorseError } = await supabase
-              .from('submissions')
-              .update({
-                status: 'Approved',
-                submitted_to: 'COA',
-                endorsed_to_coa: true,
-                approved_by: orgShortName,
-              })
-              .eq('id', selectedSubmission.id);
+            await supabase.from('notifications').insert({
+              event_id: selectedSubmission.id,
+              event_title: `${selectedSubmission.submission_type} Endorsed from ${orgShortName}`,
+              event_description: `${orgShortName} has endorsed a ${selectedSubmission.submission_type} titled "${selectedSubmission.activity_title}" from ${selectedSubmission.organization} to COA for review.`,
+              created_by: orgShortName,
+              target_org: 'COA',
+            });
 
-            if (!endorseError) {
-              await supabase.from('notifications').insert({
-                event_id: selectedSubmission.id,
-                event_title: `Liquidation Report Endorsed from ${orgShortName}`,
-                event_description: `${orgShortName} has endorsed a Liquidation Report titled "${selectedSubmission.activity_title}" from ${selectedSubmission.organization} to COA for review.`,
-                created_by: orgShortName,
-                target_org: 'COA',
-              });
+            toast({
+              title: 'Submission Endorsed',
+              description: `"${selectedSubmission.activity_title}" has been approved and endorsed to COA.`,
+            });
 
-            }
+            setIsDetailDialogOpen(false);
+            loadSubmissions();
+            onActivityChange?.();
+            return;
           }
         }
-      }
 
-      if (orgShortName === 'COA') {
+        // COA: Approve and move to Audit Files
+        if (orgShortName === 'COA') {
+          const { error } = await supabase
+            .from('submissions')
+            .update({
+              status: 'Approved',
+              approved_by: orgShortName,
+              submitted_to: orgShortName,
+              coa_reviewed: false,
+            })
+            .eq('id', selectedSubmission.id);
+
+          if (error) throw error;
+
+          toast({
+            title: 'Submission Approved',
+            description: `"${selectedSubmission.activity_title}" has been approved and moved to Audit Files.`,
+          });
+
+          setIsDetailDialogOpen(false);
+          loadSubmissions();
+          onActivityChange?.();
+          return;
+        }
+
+        // Generic approval for other orgs (OSLD, etc.)
         const { error } = await supabase
           .from('submissions')
           .update({
             status: 'Approved',
             approved_by: orgShortName,
             submitted_to: orgShortName,
-            coa_reviewed: false,
           })
           .eq('id', selectedSubmission.id);
 
@@ -417,58 +546,21 @@ export default function SubmissionsPage({
 
         toast({
           title: 'Submission Approved',
-          description: `"${selectedSubmission.activity_title}" has been approved and moved to Audit Files.`,
+          description: `"${selectedSubmission.activity_title}" has been approved successfully.`,
         });
-
 
         setIsDetailDialogOpen(false);
         loadSubmissions();
         onActivityChange?.();
-        return;
       }
-
-      const { error } = await supabase
-        .from('submissions')
-        .update({
-          status: 'Approved',
-          approved_by: orgShortName,
-          submitted_to: orgShortName,
-          coa_reviewed: false,
-        })
-        .eq('id', selectedSubmission.id);
-
-      if (error) throw error;
-
-      // Delete the osld_events record when LCO approves accomplishment or liquidation report
-      if (orgShortName === 'LCO' && selectedSubmission.event_id) {
-        if (
-          selectedSubmission.submission_type === 'Accomplishment Report' ||
-          selectedSubmission.submission_type === 'Liquidation Report'
-        ) {
-          await supabase
-            .from('osld_events')
-            .delete()
-            .eq('id', selectedSubmission.event_id);
-        }
-      }
-
-      toast({
-        title: 'Submission Approved',
-        description: `"${selectedSubmission.activity_title}" has been approved successfully.`,
-      });
-
-
-      setIsDetailDialogOpen(false);
-      loadSubmissions();
-      onActivityChange?.();
     } catch (err: unknown) {
       console.error('Error approving submission:', err);
+      const errorMessage = err instanceof Error ? err.message : (typeof err === 'object' && err !== null && 'message' in err) ? String((err as Record<string, unknown>).message) : 'Unknown error';
       toast({
         title: 'Error',
-        description: 'Failed to approve submission. Please try again.',
+        description: `Failed to approve submission: ${errorMessage}`,
         variant: 'destructive',
       });
-
     }
   };
 
@@ -1282,8 +1374,6 @@ export default function SubmissionsPage({
         </DialogContent>
       </Dialog>
 
-      {/* Main content */}
-      {renderContent()}
     </div>
   );
 
@@ -1831,14 +1921,18 @@ export default function SubmissionsPage({
       )}
 
 
-      {renderDialogs()}
     </div>
     );
   };
 
   // If embedded (used inside another dashboard), just return the content
   if (isEmbedded) {
-    return renderContent();
+    return (
+      <>
+        {renderDialogs()}
+        {renderContent()}
+      </>
+    );
   }
 
   // Full page layout with sidebar for OSLD
@@ -1940,6 +2034,8 @@ export default function SubmissionsPage({
           {renderContent()}
         </div>
       </div>
+
+      {renderDialogs()}
     </div>
   );
 }

@@ -33,7 +33,6 @@ export const approveAppeal = async (params: ApproveAppealParams) => {
         status: 'Approved',
         approved_by: approvedBy || reviewingOrganization,
         revision_reason: notes || null,
-        updated_at: new Date().toISOString()
       })
       .eq('id', submissionId);
 
@@ -52,10 +51,27 @@ export const approveAppeal = async (params: ApproveAppealParams) => {
 
     if (fetchEventError) throw fetchEventError;
 
-    // Calculate new deadline (original deadline + 3 days)
+    // Helper function to add working days (excluding weekends)
+    const addWorkingDays = (startDate: Date, days: number): Date => {
+      const result = new Date(startDate);
+      let addedDays = 0;
+      
+      while (addedDays < days) {
+        result.setDate(result.getDate() + 1);
+        const dayOfWeek = result.getDay();
+        // Skip weekends (0 = Sunday, 6 = Saturday)
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+          addedDays++;
+        }
+      }
+      
+      return result;
+    };
+
+    // Calculate new deadline (original deadline + 3 WORKING days)
+    // IMPORTANT: Always use the original deadline, not any existing override
     const originalDeadline = new Date(eventData[deadlineField]);
-    const newDeadlineDate = new Date(originalDeadline);
-    newDeadlineDate.setDate(newDeadlineDate.getDate() + 3);
+    const newDeadlineDate = addWorkingDays(originalDeadline, 3);
 
     // Step 3: Set the deadline override on the parent event
     const overrideField = deadlineType === 'accomplishment'
@@ -114,7 +130,6 @@ export const rejectAppeal = async (params: ApproveAppealParams) => {
         status: 'Rejected',
         approved_by: approvedBy || reviewingOrganization,
         revision_reason: notes || 'Appeal rejected',
-        updated_at: new Date().toISOString()
       })
       .eq('id', submissionId);
 

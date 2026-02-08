@@ -26,6 +26,7 @@ const DeadlineAppealSection = memo(({ deadlineType, eventId, orgShortName, targe
         .select('id, status, revision_reason')
         .eq('organization', orgShortName)
         .eq('submission_type', 'Letter of Appeal')
+        .eq('event_id', eventId)
         .ilike('activity_title', `%${reportType}%`)
         .limit(1);
       
@@ -40,7 +41,7 @@ const DeadlineAppealSection = memo(({ deadlineType, eventId, orgShortName, targe
       }
     };
     checkAppealStatus();
-  }, [orgShortName, reportType]);
+  }, [orgShortName, reportType, eventId]);
 
   // Check if appeal was submitted by target organization (for LCO viewing AO appeals, USG viewing LSG appeals)
   useEffect(() => {
@@ -61,6 +62,7 @@ const DeadlineAppealSection = memo(({ deadlineType, eventId, orgShortName, targe
         .from('submissions')
         .select('id, status')
         .eq('submission_type', 'Letter of Appeal')
+        .eq('event_id', eventId)
         .ilike('activity_title', `%${reportType}%`)
         .eq('submitted_to', submittedToOrg)
         .eq('status', 'Pending')
@@ -69,7 +71,7 @@ const DeadlineAppealSection = memo(({ deadlineType, eventId, orgShortName, targe
       setTargetOrgAppealSubmitted(!!data && data.length > 0);
     };
     checkTargetOrgAppealStatus();
-  }, [orgShortName, targetOrg, reportType]);
+  }, [orgShortName, targetOrg, reportType, eventId]);
 
   // Check if actual report was submitted by target organization
   useEffect(() => {

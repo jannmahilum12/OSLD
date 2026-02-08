@@ -201,7 +201,7 @@ function AODashboard({
   
   // Accomplishment Report handlers
   const isValidGdriveLink = (link: string) => {
-    return link.includes('drive.google.com') || link.includes('docs.google.com');
+    return link.includes('drive.google.com') || link.includes('docs.google.com') || link.includes('drive') || link.includes('google');
   };
 
   const handleAccomplishmentSubmit = async (eventIdToLink?: string) => {
@@ -289,7 +289,7 @@ function AODashboard({
       handleAccomplishmentCancel();
       setSuccessSubmissionType("Accomplishment Report");
       setShowSuccessDialog(true);
-    } catch (error: unknown) {
+    } catch (error) {
       const message =
         error instanceof Error
           ? error.message
@@ -724,7 +724,7 @@ function AODashboard({
                 (s.event_id === e.id || s.activity_title === e.title) &&
                 s.submission_type === 'Accomplishment Report',
             );
-            const hasApprovedAccom = accomSubmission?.status === 'Approved';
+            const hasApprovedAccom = accomSubmission?.status === 'Approved' || accomSubmission?.status === 'Deleted (Previously Approved)';
             // Mark as pending if:
             // - It's the current org's OWN submission (Pending status)
             // - OR it's a submission by the target org that this org monitors (LCO monitors AO, USG monitors LSG)
@@ -739,7 +739,7 @@ function AODashboard({
                 (s.event_id === e.id || s.activity_title === e.title) &&
                 s.submission_type === 'Liquidation Report',
             );
-            const hasApprovedLiq = liqSubmission?.status === 'Approved';
+            const hasApprovedLiq = liqSubmission?.status === 'Approved' || liqSubmission?.status === 'Deleted (Previously Approved)';
             // Mark as pending if:
             // - It's the current org's OWN submission (Pending status)
             // - OR it's a submission by the target org that this org monitors (LCO monitors AO, USG monitors LSG)
@@ -935,7 +935,7 @@ function AODashboard({
         const { data: coaData } = await supabase
           .from('submissions')
           .select('*')
-          .in('submission_type', ['Accomplishment Report', 'Liquidation Report', 'Letter of Appeal'])
+          .in('submission_type', ['Accomplishment Report', 'Liquidation Report', 'Letter of Appeal', 'Request to Conduct Activity'])
           .order('submitted_at', { ascending: false });
         data = coaData;
       } else {
@@ -952,6 +952,11 @@ function AODashboard({
         // Remove duplicate submissions per activity/type combination - keep only the latest
         const seen = new Set<string>();
         const uniqueData = data.filter(s => {
+          // Filter out deleted submissions
+          if (s.status === 'Deleted (Previously Approved)') {
+            return false;
+          }
+          
           const key = `${s.activity_title}|${s.submission_type}`;
           if (seen.has(key)) {
             return false; // Skip duplicate (older submission)
@@ -1150,6 +1155,10 @@ function AODashboard({
       // Remove duplicate submissions per activity/type combination - keep only the latest
       const seen = new Set<string>();
       const uniqueData = data.filter(s => {
+        // Filter out deleted submissions
+        if (s.status === 'Deleted (Previously Approved)') {
+          return false;
+        }
         const key = `${s.activity_title}|${s.submission_type}`;
         if (seen.has(key)) {
           return false; // Skip duplicate (older submission)
@@ -1170,6 +1179,7 @@ function AODashboard({
         revisionReason: s.revision_reason,
         coaAction: s.coa_opinion || null,
         coaComment: s.coa_comment || null,
+        approvedBy: s.approved_by || s.submitted_to,
         ...s
       })));
     }
@@ -1181,6 +1191,10 @@ function AODashboard({
 
     const logId = logToDelete.id;
     const logFileName = logToDelete.fileName;
+    const logStatus = logToDelete.status;
+    const logSubmissionType = logToDelete.type; // from map: s.submission_type -> type
+    const logActivityTitle = logToDelete.documentName; // from map: s.activity_title -> documentName
+    const logEventId = logToDelete.event_id;
 
     // Close dialog and clear state
     setIsDeleteDialogOpen(false);
@@ -1189,11 +1203,25 @@ function AODashboard({
     // Immediately remove from UI
     setActivityLogs(prev => prev.filter(log => log.id !== logId));
 
-    // Delete from database
-    await supabase
-      .from('submissions')
-      .delete()
-      .eq('id', logId);
+    // Check if submission was approved - if so, mark as deleted instead of removing
+    if (logStatus === 'Approved' && (logSubmissionType === 'Accomplishment Report' || logSubmissionType === 'Liquidation Report')) {
+      // Mark as deleted but keep record to prevent deadline reappearance
+      await supabase
+        .from('submissions')
+        .update({
+          status: 'Deleted (Previously Approved)',
+          file_url: null,
+          file_name: null,
+          gdrive_link: null
+        })
+        .eq('id', logId);
+    } else {
+      // Regular delete for non-approved submissions
+      await supabase
+        .from('submissions')
+        .delete()
+        .eq('id', logId);
+    }
 
     // Also try to delete the file from storage if it exists
     if (logFileName) {
@@ -2475,12 +2503,29 @@ function AODashboard({
             target_org: targetOrg
           });
 
+         // Log the activity to activity_logs
+         const orgKey = orgShortName.toLowerCase();
+         const storedEmail = localStorage.getItem(`${orgKey}_userEmail`) || 'System';
+         
+         const { error: activityLogError } = await supabase
+           .from('activity_logs')
+           .insert({
+             organization: orgShortName,
+             action_type: 'Request to Conduct Activity',
+             action_description: `Submitted request to conduct activity: "${activityTitle}"`,
+             performed_by: storedEmail
+           });
+         
+         if (activityLogError) {
+           console.error('Failed to log activity:', activityLogError);
+         }
+
         setShowSuccessDialog(true);
         setSuccessSubmissionType("Request Activity");
         setHasPendingSubmission(true);
         setPendingSubmissionStatus('Pending');
         handleCancelActivity();
-      } catch (error: unknown) {
+      } catch (error) {
         console.error('Error submitting activity:', error);
         alert('Failed to submit activity request. Please try again.');
       }
@@ -3838,7 +3883,7 @@ function AODashboard({
               </tr>
             ) : (
               Object.entries(groupedLogs).map(([activityTitle, docs]) => {
-                const log = docs.accomplishment || docs.liquidation || docs.auditFiles?.[0];
+                const log = docs.rtc || docs.accomplishment || docs.liquidation || docs.loa || docs.auditFiles?.[0];
                 if (!log) return null;
                 
                 return (
@@ -3878,7 +3923,7 @@ function AODashboard({
                           <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.rtc.status)}`}>
                             {docs.rtc.status === 'Approved' && docs.rtc.approvedBy ? `✓ ${docs.rtc.approvedBy}` : 
                              docs.rtc.status === 'For Revision' && docs.rtc.approvedBy ? `⚠️ Rev` : 
-                             docs.rtc.status === 'Pending' ? '⏳' :
+                             docs.rtc.status === 'Pending' ? '⏳ Pending' :
                              docs.rtc.status}
                           </span>
                         </div>
@@ -3901,7 +3946,7 @@ function AODashboard({
                           <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.accomplishment.status)}`}>
                             {docs.accomplishment.status === 'Approved' && docs.accomplishment.approvedBy ? `✓ ${docs.accomplishment.approvedBy}` : 
                              docs.accomplishment.status === 'For Revision' && docs.accomplishment.approvedBy ? `⚠️ Rev` : 
-                             docs.accomplishment.status === 'Pending' ? '⏳' :
+                             docs.accomplishment.status === 'Pending' ? '⏳ Pending' :
                              docs.accomplishment.status}
                           </span>
                         </div>
@@ -3924,7 +3969,7 @@ function AODashboard({
                           <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.liquidation.status)}`}>
                             {docs.liquidation.status === 'Approved' && docs.liquidation.approvedBy ? `✓ ${docs.liquidation.approvedBy}` : 
                              docs.liquidation.status === 'For Revision' && docs.liquidation.approvedBy ? `⚠️ Rev` : 
-                             docs.liquidation.status === 'Pending' ? '⏳' :
+                             docs.liquidation.status === 'Pending' ? '⏳ Pending' :
                              docs.liquidation.status}
                           </span>
                         </div>
@@ -3947,7 +3992,7 @@ function AODashboard({
                           <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.loa.status)}`}>
                             {docs.loa.status === 'Approved' && docs.loa.approvedBy ? `✓ ${docs.loa.approvedBy}` : 
                              docs.loa.status === 'For Revision' && docs.loa.approvedBy ? `⚠️ Rev` : 
-                             docs.loa.status === 'Pending' ? '⏳' :
+                             docs.loa.status === 'Pending' ? '⏳ Pending' :
                              docs.loa.status}
                           </span>
                         </div>
@@ -3955,9 +4000,15 @@ function AODashboard({
                         <span className="text-[10px] text-gray-400">Not Sub.</span>
                       )}
                     </td>
-                    <td className="px-2 py-2 text-xs text-gray-500">{log.date}</td>
+                    <td className="px-2 py-2 text-xs text-gray-500">
+                      {/* Show most recent submission date */}
+                      {[docs.rtc, docs.accomplishment, docs.liquidation, docs.loa]
+                        .filter(Boolean)
+                        .map(d => d.date)
+                        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || log.date}
+                    </td>
                     <td className="px-2 py-2">
-                      <div className="flex items-center gap-1">{showEndorseButton && log.status === 'Approved' && (docs.accomplishment || docs.liquidation) && log.submitted_to !== 'COA' && (
+                      <div className="flex items-center gap-1">{showEndorseButton && (docs.accomplishment?.status === 'Approved' || docs.liquidation?.status === 'Approved') && (docs.accomplishment || docs.liquidation) && (docs.accomplishment?.submitted_to !== 'COA' && docs.liquidation?.submitted_to !== 'COA') && (
                           <Button
                             size="sm"
                             className="text-[10px] h-6 px-2 bg-amber-600 text-white hover:bg-amber-700"
@@ -4024,7 +4075,7 @@ function AODashboard({
                             Endorse
                           </Button>
                         )}
-                        {showEndorseButton && log.status === 'Approved' && (docs.accomplishment || docs.liquidation) && log.submitted_to === 'COA' && (
+                        {showEndorseButton && (docs.accomplishment?.status === 'Approved' || docs.liquidation?.status === 'Approved') && (docs.accomplishment || docs.liquidation) && (docs.accomplishment?.submitted_to === 'COA' || docs.liquidation?.submitted_to === 'COA') && (
                           <Button size="sm" className="text-[10px] h-6 px-2 bg-gray-500 text-white cursor-not-allowed" disabled>
                             Endorsed
                           </Button>
@@ -4033,11 +4084,13 @@ function AODashboard({
                           size="sm"
                           className="text-[10px] h-6 px-2 bg-[#003b27] text-white hover:bg-[#002a1c]"
                           onClick={() => {
-                            // Prepare grouped log with AR and LR data
+                            // Prepare grouped log with all submission types
                             const groupedLog = {
                               ...log,
                               accomplishmentData: docs.accomplishment,
                               liquidationData: docs.liquidation,
+                              rtcData: docs.rtc,
+                              loaData: docs.loa,
                               isGroupedView: true
                             };
                             setSelectedLog(groupedLog);
@@ -4391,58 +4444,50 @@ function AODashboard({
 
         {/* Activity Log Detail Dialog */}
         <Dialog open={isLogDetailOpen} onOpenChange={setIsLogDetailOpen}>
-          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-white text-black">
-            <DialogHeader className="text-black">
-              <DialogTitle className="text-xl font-bold text-black" style={{ color: "#003b27" }}>
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-white text-black border-0 shadow-lg">
+            <DialogHeader className="text-black border-b border-gray-200 pb-4 mb-4">
+              <DialogTitle className="text-2xl font-bold text-black" style={{ color: "#003b27" }}>
                 Activity Details
               </DialogTitle>
             </DialogHeader>
             {!selectedLog ? (
-              <div className="py-8 text-center text-gray-700 font-medium">
+              <div className="py-8 text-center text-gray-500 font-medium">
                 Loading activity details...
               </div>
             ) : (
-              <div className="space-y-4 py-4 text-black">
-                <div className="flex items-center justify-between text-black">
-                  <span className="text-sm text-gray-700 font-medium">Status</span>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(
-                    selectedLog.isGroupedView 
-                      ? (selectedLog.accomplishmentData?.status === 'For Revision' || selectedLog.liquidationData?.status === 'For Revision' 
-                          ? 'For Revision' 
-                          : selectedLog.status)
-                      : selectedLog.status
-                  )}`}>
-                    {selectedLog.isGroupedView 
-                      ? (selectedLog.accomplishmentData?.status === 'For Revision' || selectedLog.liquidationData?.status === 'For Revision' 
-                          ? 'For Revision' 
-                          : selectedLog.status)
-                      : selectedLog.status}
-                  </span>
+              <div className="space-y-5 py-2 text-black">
+                <div className="p-3 bg-gradient-to-r from-green-50 to-transparent rounded-lg border border-green-100">
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Activity Name</p>
+                  <p className="text-lg font-semibold text-gray-900 mt-1">{selectedLog.documentName}</p>
                 </div>
 
                 {/* Grouped View: Show revision reasons for AR and LR separately */}
                 {selectedLog.isGroupedView && (selectedLog.accomplishmentData?.status === 'For Revision' || selectedLog.liquidationData?.status === 'For Revision') && (
                   <div className="space-y-3">
                     {selectedLog.accomplishmentData?.status === 'For Revision' && selectedLog.accomplishmentData?.revisionReason && (
-                      <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
-                        <p className="text-orange-800 font-medium mb-2">📄 Accomplishment Report - Revision Required</p>
-                        <p className="text-gray-700">
+                      <div className="p-4 bg-gradient-to-br from-orange-50 to-orange-25 border border-orange-200 rounded-lg shadow-sm">
+                        <p className="text-orange-900 font-semibold mb-2 flex items-center gap-2">
+                          <span className="text-lg">📄</span> Accomplishment Report - Revision Required
+                        </p>
+                        <p className="text-gray-700 text-sm mb-3">
                           You are advised to revise your Accomplishment Report due to the following reasons:
                         </p>
-                        <div className="mt-2 p-3 bg-white border rounded">
-                          <p className="text-gray-800">{selectedLog.accomplishmentData.revisionReason}</p>
+                        <div className="mt-2 p-3 bg-white border border-orange-100 rounded">
+                          <p className="text-gray-800 text-sm">{selectedLog.accomplishmentData.revisionReason}</p>
                         </div>
                       </div>
                     )}
                     
                     {selectedLog.liquidationData?.status === 'For Revision' && selectedLog.liquidationData?.revisionReason && (
-                      <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
-                        <p className="text-orange-800 font-medium mb-2">💰 Liquidation Report - Revision Required</p>
-                        <p className="text-gray-700">
+                      <div className="p-4 bg-gradient-to-br from-orange-50 to-orange-25 border border-orange-200 rounded-lg shadow-sm">
+                        <p className="text-orange-900 font-semibold mb-2 flex items-center gap-2">
+                          <span className="text-lg">💰</span> Liquidation Report - Revision Required
+                        </p>
+                        <p className="text-gray-700 text-sm mb-3">
                           You are advised to revise your Liquidation Report due to the following reasons:
                         </p>
-                        <div className="mt-2 p-3 bg-white border rounded">
-                          <p className="text-gray-800">{selectedLog.liquidationData.revisionReason}</p>
+                        <div className="mt-2 p-3 bg-white border border-orange-100 rounded">
+                          <p className="text-gray-800 text-sm">{selectedLog.liquidationData.revisionReason}</p>
                         </div>
                       </div>
                     )}
@@ -4455,13 +4500,13 @@ function AODashboard({
 
                 {/* Single View: Show revision reason for single document */}
                 {!selectedLog.isGroupedView && selectedLog.status === 'For Revision' && selectedLog.revisionReason && (
-                  <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
-                    <p className="text-orange-800 font-medium mb-2">Revision Required</p>
-                    <p className="text-gray-700">
+                  <div className="p-4 bg-gradient-to-br from-orange-50 to-orange-25 border border-orange-200 rounded-lg shadow-sm">
+                    <p className="text-orange-900 font-semibold mb-2">⚠️ Revision Required</p>
+                    <p className="text-gray-700 text-sm mb-3">
                       You are advised to revise your request to conduct activity due to the following reasons:
                     </p>
-                    <div className="mt-2 p-3 bg-white border rounded">
-                      <p className="text-gray-800">{selectedLog.revisionReason}</p>
+                    <div className="mt-2 p-3 bg-white border border-orange-100 rounded">
+                      <p className="text-gray-800 text-sm">{selectedLog.revisionReason}</p>
                     </div>
                     <p className="text-sm text-gray-600 italic mt-3">
                       Please stay updated for further announcements.
@@ -4471,129 +4516,319 @@ function AODashboard({
 
                 {/* COA Remarks Section */}
                 {(selectedLog.coaAction || selectedLog.coaComment) && (
-                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                    <p className="text-blue-800 font-medium mb-2">COA's Remarks</p>
+                  <div className="p-4 bg-gradient-to-br from-blue-50 to-blue-25 border border-blue-200 rounded-lg shadow-sm">
+                    <p className="text-blue-900 font-semibold mb-3 flex items-center gap-2">
+                      <span className="text-lg">💭</span> COA's Remarks
+                    </p>
                     {selectedLog.coaAction && (
-                      <p className="text-gray-700 mb-1">
-                        <span className="font-semibold">Opinion:</span> {selectedLog.coaAction}
+                      <p className="text-gray-700 text-sm mb-2">
+                        <span className="font-semibold text-gray-900">Opinion:</span> <span className="text-gray-700">{selectedLog.coaAction}</span>
                       </p>
                     )}
                     {selectedLog.coaComment && (
-                      <p className="text-gray-700">
-                        <span className="font-semibold">Comment:</span> {selectedLog.coaComment}
+                      <p className="text-gray-700 text-sm">
+                        <span className="font-semibold text-gray-900">Comment:</span> <span className="text-gray-700">{selectedLog.coaComment}</span>
                       </p>
                     )}
                   </div>
                 )}
 
-                <div className="p-4 bg-[#003b27]/5 rounded-lg">
-                  <h3 className="text-lg font-bold text-[#003b27]">{selectedLog.documentName}</h3>
-                  <p className="text-sm text-gray-600 mt-1">
-                    {selectedLog.isGroupedView 
-                      ? (selectedLog.accomplishmentData?.status === 'For Revision' && selectedLog.liquidationData?.status === 'For Revision'
-                          ? 'Accomplishment Report & Liquidation Report'
-                          : selectedLog.liquidationData?.status === 'For Revision'
-                          ? 'Liquidation Report'
-                          : selectedLog.accomplishmentData?.status === 'For Revision'
-                          ? 'Accomplishment Report'
-                          : selectedLog.type)
-                      : selectedLog.type}
-                  </p>
-                </div>
-
                 {selectedLog.type !== 'Accomplishment Report' && selectedLog.type !== 'Liquidation Report' && selectedLog.type !== 'Letter of Appeal' && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-3 border rounded-lg">
-                      <p className="text-xs text-gray-500">Duration</p>
-                      <p className="font-medium">{selectedLog.activity_duration}</p>
-                    </div>
-                    <div className="p-3 border rounded-lg">
-                      <p className="text-xs text-gray-500">Venue</p>
-                      <p className="font-medium">{selectedLog.activity_venue}</p>
-                    </div>
-                    <div className="p-3 border rounded-lg">
-                      <p className="text-xs text-gray-500">Participants</p>
-                      <p className="font-medium">{selectedLog.activity_participants}</p>
-                    </div>
-                    <div className="p-3 border rounded-lg">
-                      <p className="text-xs text-gray-500">Source of Funds</p>
-                      <p className="font-medium">₱{selectedLog.activity_funds}</p>
-                    </div>
-                    <div className="p-3 border rounded-lg">
-                      <p className="text-xs text-gray-500">Budget</p>
-                      <p className="font-medium">₱{selectedLog.activity_budget}</p>
-                    </div>
-                    <div className="p-3 border rounded-lg">
-                      <p className="text-xs text-gray-500">SDG</p>
-                      <p className="font-medium">{selectedLog.activity_sdg}</p>
-                    </div>
-                    <div className="p-3 border rounded-lg col-span-2">
-                      <p className="text-xs text-gray-500">LIKHA Agenda</p>
-                      <p className="font-medium">{selectedLog.activity_likha}</p>
+                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-3">Activity Information</h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Duration</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">{selectedLog.activity_duration}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Venue</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">{selectedLog.activity_venue}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Participants</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">{selectedLog.activity_participants}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Source of Funds</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">₱{selectedLog.activity_funds}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Budget</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">₱{selectedLog.activity_budget}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">SDG</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">{selectedLog.activity_sdg}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200 col-span-2">
+                        <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">LIKHA Agenda</p>
+                        <p className="text-sm font-medium text-gray-900 mt-1">{selectedLog.activity_likha}</p>
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* Grouped View: Show both AR and LR files if both are for revision */}
-                {selectedLog.isGroupedView && selectedLog.accomplishmentData?.status === 'For Revision' && selectedLog.liquidationData?.status === 'For Revision' ? (
-                  <div className="space-y-3">
-                    <div className="p-4 border-2 border-dashed rounded-lg">
+                {/* All Submitted Files Section */}
+                <div className="space-y-3 border-t border-gray-200 pt-4">
+                  <h3 className="font-semibold text-gray-900 text-sm uppercase tracking-wide flex items-center gap-2">
+                    <span className="text-lg">📁</span> Submitted Files
+                  </h3>
+                  
+                  {/* RTC File */}
+                  {selectedLog.rtcData?.fileUrl && (
+                    <div className="p-4 border border-gray-300 rounded-lg hover:shadow-md transition-all duration-200 bg-white">
                       <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-gray-800">Accomplishment Report File</p>
-                          <p className="text-sm text-gray-500">View submitted file</p>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">📋</span>
+                            <p className="font-semibold text-gray-900">Request to Conduct Activity</p>
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${getStatusColor(selectedLog.rtcData.status)}`}>
+                              {selectedLog.rtcData.status}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">{selectedLog.rtcData.fileName}</p>
                         </div>
-                        <a href={selectedLog.accomplishmentData?.fileUrl} target="_blank" rel="noopener noreferrer">
-                          <Button size="sm" style={{ backgroundColor: "#003b27" }}>
-                            Open Link
+                        <div className="flex items-center gap-2">
+                          <a href={selectedLog.rtcData.fileUrl} target="_blank" rel="noopener noreferrer">
+                            <Button size="sm" style={{ backgroundColor: "#003b27" }} className="text-white">
+                              Open
+                            </Button>
+                          </a>
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={async () => {
+                              if (confirm('Are you sure you want to delete this file?')) {
+                                try {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .delete()
+                                    .eq('id', selectedLog.rtcData.id);
+                                  
+                                  if (error) throw error;
+                                  
+                                  toast({
+                                    title: "Success",
+                                    description: "File deleted successfully.",
+                                  });
+                                  
+                                  setIsLogDetailOpen(false);
+                                  reloadActivityLogs();
+                                } catch (error) {
+                                  console.error('Error deleting file:', error);
+                                  toast({
+                                    title: "Error",
+                                    description: "Failed to delete file.",
+                                    variant: "destructive"
+                                  });
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </Button>
-                        </a>
+                        </div>
                       </div>
                     </div>
-                    <div className="p-4 border-2 border-dashed rounded-lg">
+                  )}
+
+                  {/* Accomplishment Report File */}
+                  {(selectedLog.accomplishmentData?.fileUrl || (selectedLog.type === 'Accomplishment Report' && selectedLog.fileUrl)) && (
+                    <div className="p-4 border border-gray-300 rounded-lg hover:shadow-md transition-all duration-200 bg-white">
                       <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-gray-800">Liquidation Report File</p>
-                          <p className="text-sm text-gray-500">View submitted file</p>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">📝</span>
+                            <p className="font-semibold text-gray-900">Accomplishment Report</p>
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${getStatusColor(selectedLog.accomplishmentData?.status || selectedLog.status)}`}>
+                              {selectedLog.accomplishmentData?.status || selectedLog.status}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">{selectedLog.accomplishmentData?.fileName || selectedLog.fileName}</p>
                         </div>
-                        <a href={selectedLog.liquidationData?.fileUrl} target="_blank" rel="noopener noreferrer">
-                          <Button size="sm" style={{ backgroundColor: "#003b27" }}>
-                            Open Link
+                        <div className="flex items-center gap-2">
+                          <a href={selectedLog.accomplishmentData?.fileUrl || selectedLog.fileUrl} target="_blank" rel="noopener noreferrer">
+                            <Button size="sm" style={{ backgroundColor: "#003b27" }} className="text-white">
+                              Open
+                            </Button>
+                          </a>
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={async () => {
+                              if (confirm('Are you sure you want to delete this file?')) {
+                                try {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .delete()
+                                    .eq('id', selectedLog.accomplishmentData?.id || selectedLog.id);
+                                  
+                                  if (error) throw error;
+                                  
+                                  toast({
+                                    title: "Success",
+                                    description: "File deleted successfully.",
+                                  });
+                                  
+                                  setIsLogDetailOpen(false);
+                                  reloadActivityLogs();
+                                } catch (error) {
+                                  console.error('Error deleting file:', error);
+                                  toast({
+                                    title: "Error",
+                                    description: "Failed to delete file.",
+                                    variant: "destructive"
+                                  });
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </Button>
-                        </a>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="p-4 border-2 border-dashed rounded-lg">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-800">
-                          {selectedLog.isGroupedView && selectedLog.liquidationData?.status === 'For Revision' 
-                            ? 'Liquidation Report File'
-                            : selectedLog.isGroupedView && selectedLog.accomplishmentData?.status === 'For Revision'
-                            ? 'Accomplishment Report File'
-                            : selectedLog.type === 'Letter of Appeal' ? 'File for Appeal' 
-                            : selectedLog.type === 'Accomplishment Report' ? 'Accomplishment Report File'
-                            : selectedLog.type === 'Liquidation Report' ? 'Liquidation Report File'
-                            : 'GDrive Folder Link'}
-                        </p>
-                        <p className="text-sm text-gray-500">
-                          {selectedLog.type === 'Request to Conduct Activity' ? 'Contains: Activity Design, Budgetary Requirements, Minutes of Meeting, Annual Proposal, etc.' : 'View submitted file'}
-                        </p>
+                  )}
+
+                  {/* Liquidation Report File */}
+                  {(selectedLog.liquidationData?.fileUrl || (selectedLog.type === 'Liquidation Report' && selectedLog.fileUrl)) && (
+                    <div className="p-4 border border-gray-300 rounded-lg hover:shadow-md transition-all duration-200 bg-white">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">💰</span>
+                            <p className="font-semibold text-gray-900">Liquidation Report</p>
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${getStatusColor(selectedLog.liquidationData?.status || selectedLog.status)}`}>
+                              {selectedLog.liquidationData?.status || selectedLog.status}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">{selectedLog.liquidationData?.fileName || selectedLog.fileName}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <a href={selectedLog.liquidationData?.fileUrl || selectedLog.fileUrl} target="_blank" rel="noopener noreferrer">
+                            <Button size="sm" style={{ backgroundColor: "#003b27" }} className="text-white">
+                              Open
+                            </Button>
+                          </a>
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={async () => {
+                              if (confirm('Are you sure you want to delete this file?')) {
+                                try {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .delete()
+                                    .eq('id', selectedLog.liquidationData?.id || selectedLog.id);
+                                  
+                                  if (error) throw error;
+                                  
+                                  toast({
+                                    title: "Success",
+                                    description: "File deleted successfully.",
+                                  });
+                                  
+                                  setIsLogDetailOpen(false);
+                                  reloadActivityLogs();
+                                } catch (error) {
+                                  console.error('Error deleting file:', error);
+                                  toast({
+                                    title: "Error",
+                                    description: "Failed to delete file.",
+                                    variant: "destructive"
+                                  });
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
-                      <a href={selectedLog.fileUrl} target="_blank" rel="noopener noreferrer">
-                        <Button size="sm" style={{ backgroundColor: "#003b27" }}>
-                          Open Link
-                        </Button>
-                      </a>
                     </div>
-                  </div>
-                )}
+                  )}
+
+                  {/* Letter of Appeal File */}
+                  {selectedLog.loaData?.fileUrl || (selectedLog.type === 'Letter of Appeal' && selectedLog.fileUrl) && (
+                    <div className="p-4 border border-gray-300 rounded-lg hover:shadow-md transition-all duration-200 bg-white">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">✉️</span>
+                            <p className="font-semibold text-gray-900">Letter of Appeal</p>
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${getStatusColor(selectedLog.loaData?.status || selectedLog.status)}`}>
+                              {selectedLog.loaData?.status || selectedLog.status}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">{selectedLog.loaData?.fileName || selectedLog.fileName}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <a href={selectedLog.loaData?.fileUrl || selectedLog.fileUrl} target="_blank" rel="noopener noreferrer">
+                            <Button size="sm" style={{ backgroundColor: "#003b27" }} className="text-white">
+                              Open
+                            </Button>
+                          </a>
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={async () => {
+                              if (confirm('Are you sure you want to delete this file?')) {
+                                try {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .delete()
+                                    .eq('id', selectedLog.loaData?.id || selectedLog.id);
+                                  
+                                  if (error) throw error;
+                                  
+                                  toast({
+                                    title: "Success",
+                                    description: "File deleted successfully.",
+                                  });
+                                  
+                                  setIsLogDetailOpen(false);
+                                  reloadActivityLogs();
+                                } catch (error) {
+                                  console.error('Error deleting file:', error);
+                                  toast({
+                                    title: "Error",
+                                    description: "Failed to delete file.",
+                                    variant: "destructive"
+                                  });
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Show message if no files */}
+                  {!selectedLog.rtcData?.fileUrl && 
+                   !selectedLog.accomplishmentData?.fileUrl && 
+                   !(selectedLog.type === 'Accomplishment Report' && selectedLog.fileUrl) &&
+                   !selectedLog.liquidationData?.fileUrl && 
+                   !(selectedLog.type === 'Liquidation Report' && selectedLog.fileUrl) &&
+                   !selectedLog.loaData?.fileUrl &&
+                   !(selectedLog.type === 'Letter of Appeal' && selectedLog.fileUrl) && (
+                    <div className="p-8 text-center text-gray-400 border border-gray-300 rounded-lg bg-gray-50">
+                      <FileText className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                      <p className="text-sm text-gray-600">No files submitted yet</p>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsLogDetailOpen(false)}>
+            <DialogFooter className="border-t border-gray-200 pt-4 mt-4">
+              <Button variant="outline" onClick={() => setIsLogDetailOpen(false)} className="border-gray-300 hover:bg-gray-50">
                 Close
               </Button>
             </DialogFooter>

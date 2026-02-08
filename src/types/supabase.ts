@@ -434,6 +434,7 @@ export type Database = {
       }
       osld_events: {
         Row: {
+          accomplishment_deadline: string | null
           accomplishment_deadline_override: string | null
           all_day: boolean | null
           created_at: string | null
@@ -442,6 +443,7 @@ export type Database = {
           end_date: string
           end_time: string | null
           id: string
+          liquidation_deadline: string | null
           liquidation_deadline_override: string | null
           recurrence_day: string | null
           recurrence_rule: string | null
@@ -454,6 +456,7 @@ export type Database = {
           venue: string | null
         }
         Insert: {
+          accomplishment_deadline?: string | null
           accomplishment_deadline_override?: string | null
           all_day?: boolean | null
           created_at?: string | null
@@ -462,6 +465,7 @@ export type Database = {
           end_date: string
           end_time?: string | null
           id: string
+          liquidation_deadline?: string | null
           liquidation_deadline_override?: string | null
           recurrence_day?: string | null
           recurrence_rule?: string | null
@@ -474,6 +478,7 @@ export type Database = {
           venue?: string | null
         }
         Update: {
+          accomplishment_deadline?: string | null
           accomplishment_deadline_override?: string | null
           all_day?: boolean | null
           created_at?: string | null
@@ -482,6 +487,7 @@ export type Database = {
           end_date?: string
           end_time?: string | null
           id?: string
+          liquidation_deadline?: string | null
           liquidation_deadline_override?: string | null
           recurrence_day?: string | null
           recurrence_rule?: string | null
@@ -635,7 +641,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      add_working_days: {
+        Args: { num_days: number; start_date: string }
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never

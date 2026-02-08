@@ -451,36 +451,41 @@ export default function OSLDDashboard() {
     loadUserData();
   }, []);
 
+  // Load activity logs function
+  const loadActivityLogs = async () => {
+    // Fetch submissions: OSLD's own submissions OR submitted to OSLD OR approved by OSLD (endorsed to COA) OR endorsed to OSLD by COA
+    const { data } = await supabase
+      .from('submissions')
+      .select('*')
+      .or('organization.eq.OSLD,submitted_to.eq.OSLD,approved_by.eq.OSLD,endorsed_to_osld.eq.true')
+      .order('submitted_at', { ascending: false });
+    
+    if (data) {
+      setActivityLogs(
+        data
+          .filter((s) => s.status !== "Deleted (Previously Approved)") // Filter out deleted submissions
+          .map((s) => ({
+            id: s.id,
+        documentName: s.activity_title,
+        type: s.submission_type,
+        organization: s.organization,
+        status: s.status,
+        date: new Date(s.submitted_at).toLocaleDateString(),
+        fileUrl: s.file_url,
+        fileName: s.file_name,
+        revisionReason: s.revision_reason,
+        rejectionReason: s.rejection_reason,
+        approvedBy: s.approved_by || s.submitted_to, // Use approved_by field, fallback to submitted_to
+        coaOpinion: s.coa_opinion,
+        coaComment: s.coa_comment,
+        endorsedToOsld: s.endorsed_to_osld,
+        ...s
+      })));
+    }
+  };
+
   // Load activity logs from database - OSLD's own submissions and submissions submitted to OSLD
   useEffect(() => {
-    const loadActivityLogs = async () => {
-      // Fetch submissions: OSLD's own submissions OR submitted to OSLD OR approved by OSLD (endorsed to COA) OR endorsed to OSLD by COA
-      const { data } = await supabase
-        .from('submissions')
-        .select('*')
-        .or('organization.eq.OSLD,submitted_to.eq.OSLD,approved_by.eq.OSLD,endorsed_to_osld.eq.true')
-        .order('submitted_at', { ascending: false });
-      
-      if (data) {
-        setActivityLogs(data.map(s => ({
-          id: s.id,
-          documentName: s.activity_title,
-          type: s.submission_type,
-          organization: s.organization,
-          status: s.status,
-          date: new Date(s.submitted_at).toLocaleDateString(),
-          fileUrl: s.file_url,
-          fileName: s.file_name,
-          revisionReason: s.revision_reason,
-          rejectionReason: s.rejection_reason,
-          approvedBy: s.approved_by || s.submitted_to, // Use approved_by field, fallback to submitted_to
-          coaOpinion: s.coa_opinion,
-          coaComment: s.coa_comment,
-          endorsedToOsld: s.endorsed_to_osld,
-          ...s
-        })));
-      }
-    };
     loadActivityLogs();
   }, []);
 
@@ -778,8 +783,8 @@ export default function OSLDDashboard() {
           
           if (!data || data.length === 0) return false;
           
-          // Check if any submission is approved
-          const hasApproved = data.some(s => s.status === 'Approved');
+          // Check if any submission is approved or was previously approved and deleted
+          const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
           return hasApproved;
         };
         
@@ -2605,8 +2610,34 @@ ${deadlineInfo}`;
                                       <Button
                                         size="sm"
                                         className="text-xs bg-[#003b27] text-white hover:bg-[#002a1c]"
-                                        onClick={() => {
-                                          setSelectedActivityLog(log);
+                                        onClick={async () => {
+                                          // Fetch all submissions for this document
+                                          const { data: allSubmissions } = await supabase
+                                            .from('submissions')
+                                            .select('*')
+                                            .eq('activity_title', log.documentName)
+                                            .eq('organization', log.organization);
+                                          
+                                          const groupedData: any = {
+                                            ...log,
+                                            isGroupedView: true,
+                                            allSubmissions: allSubmissions || []
+                                          };
+                                          
+                                          // Group by type
+                                          allSubmissions?.forEach(sub => {
+                                            if (sub.submission_type === 'Request to Conduct Activity') {
+                                              groupedData.rtcData = sub;
+                                            } else if (sub.submission_type === 'Accomplishment Report') {
+                                              groupedData.accomplishmentData = sub;
+                                            } else if (sub.submission_type === 'Liquidation Report') {
+                                              groupedData.liquidationData = sub;
+                                            } else if (sub.submission_type === 'Letter of Appeal') {
+                                              groupedData.loaData = sub;
+                                            }
+                                          });
+                                          
+                                          setSelectedActivityLog(groupedData);
                                           setIsActivityLogDetailOpen(true);
                                         }}
                                       >
@@ -2850,8 +2881,34 @@ ${deadlineInfo}`;
                                                                         variant="ghost"
                                                                         size="sm"
                                                                         className="flex items-center gap-1 text-gray-700 hover:text-blue-700"
-                                                                        onClick={() => {
-                                                                          setSelectedActivityLog(docs.accomplishment);
+                                                                        onClick={async () => {
+                                                                          // Fetch all submissions for this document
+                                                                          const { data: allSubmissions } = await supabase
+                                                                            .from('submissions')
+                                                                            .select('*')
+                                                                            .eq('activity_title', docs.accomplishment.documentName)
+                                                                            .eq('organization', docs.accomplishment.organization);
+                                                                          
+                                                                          const groupedData: any = {
+                                                                            ...docs.accomplishment,
+                                                                            isGroupedView: true,
+                                                                            allSubmissions: allSubmissions || []
+                                                                          };
+                                                                          
+                                                                          // Group by type
+                                                                          allSubmissions?.forEach(sub => {
+                                                                            if (sub.submission_type === 'Request to Conduct Activity') {
+                                                                              groupedData.rtcData = sub;
+                                                                            } else if (sub.submission_type === 'Accomplishment Report') {
+                                                                              groupedData.accomplishmentData = sub;
+                                                                            } else if (sub.submission_type === 'Liquidation Report') {
+                                                                              groupedData.liquidationData = sub;
+                                                                            } else if (sub.submission_type === 'Letter of Appeal') {
+                                                                              groupedData.loaData = sub;
+                                                                            }
+                                                                          });
+                                                                          
+                                                                          setSelectedActivityLog(groupedData);
                                                                           setIsActivityLogDetailOpen(true);
                                                                         }}
                                                                       >
@@ -2868,8 +2925,34 @@ ${deadlineInfo}`;
                                                                         variant="ghost"
                                                                         size="sm"
                                                                         className="flex items-center gap-1 text-gray-700 hover:text-blue-700"
-                                                                        onClick={() => {
-                                                                          setSelectedActivityLog(docs.liquidation);
+                                                                        onClick={async () => {
+                                                                          // Fetch all submissions for this document
+                                                                          const { data: allSubmissions } = await supabase
+                                                                            .from('submissions')
+                                                                            .select('*')
+                                                                            .eq('activity_title', docs.liquidation.documentName)
+                                                                            .eq('organization', docs.liquidation.organization);
+                                                                          
+                                                                          const groupedData: any = {
+                                                                            ...docs.liquidation,
+                                                                            isGroupedView: true,
+                                                                            allSubmissions: allSubmissions || []
+                                                                          };
+                                                                          
+                                                                          // Group by type
+                                                                          allSubmissions?.forEach(sub => {
+                                                                            if (sub.submission_type === 'Request to Conduct Activity') {
+                                                                              groupedData.rtcData = sub;
+                                                                            } else if (sub.submission_type === 'Accomplishment Report') {
+                                                                              groupedData.accomplishmentData = sub;
+                                                                            } else if (sub.submission_type === 'Liquidation Report') {
+                                                                              groupedData.liquidationData = sub;
+                                                                            } else if (sub.submission_type === 'Letter of Appeal') {
+                                                                              groupedData.loaData = sub;
+                                                                            }
+                                                                          });
+                                                                          
+                                                                          setSelectedActivityLog(groupedData);
                                                                           setIsActivityLogDetailOpen(true);
                                                                         }}
                                                                       >
@@ -3125,8 +3208,290 @@ ${deadlineInfo}`;
                   <p className="text-gray-800">{selectedActivityLog.date}</p>
                 </div>
 
-                {/* File Attachment */}
-                {selectedActivityLog.fileUrl && (
+                {/* All Submitted Files Section */}
+                {selectedActivityLog.isGroupedView && (
+                  <div className="space-y-3">
+                    <h3 className="font-semibold text-gray-900 text-sm">All Submitted Files</h3>
+                    
+                    {/* RTC File */}
+                    {selectedActivityLog.rtcData?.file_url && (
+                      <div className="p-4 border-2 border-dashed rounded-lg group hover:bg-gray-50 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-[#003b27]" />
+                              <p className="font-medium text-gray-800">Request to Conduct Activity</p>
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                                selectedActivityLog.rtcData.status === "Approved" ? "bg-green-100 text-green-800" :
+                                selectedActivityLog.rtcData.status === "Pending" ? "bg-yellow-100 text-yellow-800" :
+                                selectedActivityLog.rtcData.status === "For Revision" ? "bg-orange-100 text-orange-800" :
+                                selectedActivityLog.rtcData.status === "Rejected" ? "bg-red-100 text-red-800" :
+                                "bg-blue-100 text-blue-800"
+                              }`}>
+                                {selectedActivityLog.rtcData.status}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">{selectedActivityLog.rtcData.file_name}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <a href={selectedActivityLog.rtcData.file_url} target="_blank" rel="noopener noreferrer">
+                              <Button size="sm" style={{ backgroundColor: "#003b27" }}>
+                                <Download className="h-4 w-4 mr-1" />
+                                Open
+                              </Button>
+                            </a>
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              onClick={async () => {
+                                if (confirm('Are you sure you want to delete this file?')) {
+                                  try {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedActivityLog.rtcData.id);
+                                    
+                                    if (error) throw error;
+                                    
+                                    toast({
+                                      title: "Success",
+                                      description: "File deleted successfully.",
+                                    });
+                                    
+                                    setIsActivityLogDetailOpen(false);
+                                    loadActivityLogs();
+                                  } catch (error) {
+                                    console.error('Error deleting file:', error);
+                                    toast({
+                                      title: "Error",
+                                      description: "Failed to delete file.",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Accomplishment Report File */}
+                    {selectedActivityLog.accomplishmentData?.file_url && (
+                      <div className="p-4 border-2 border-dashed rounded-lg group hover:bg-gray-50 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-[#003b27]" />
+                              <p className="font-medium text-gray-800">Accomplishment Report</p>
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                                selectedActivityLog.accomplishmentData.status === "Approved" ? "bg-green-100 text-green-800" :
+                                selectedActivityLog.accomplishmentData.status === "Pending" ? "bg-yellow-100 text-yellow-800" :
+                                selectedActivityLog.accomplishmentData.status === "For Revision" ? "bg-orange-100 text-orange-800" :
+                                selectedActivityLog.accomplishmentData.status === "Rejected" ? "bg-red-100 text-red-800" :
+                                "bg-blue-100 text-blue-800"
+                              }`}>
+                                {selectedActivityLog.accomplishmentData.status}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">{selectedActivityLog.accomplishmentData.file_name}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <a href={selectedActivityLog.accomplishmentData.file_url} target="_blank" rel="noopener noreferrer">
+                              <Button size="sm" style={{ backgroundColor: "#003b27" }}>
+                                <Download className="h-4 w-4 mr-1" />
+                                Open
+                              </Button>
+                            </a>
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              onClick={async () => {
+                                if (confirm('Are you sure you want to delete this file?')) {
+                                  try {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedActivityLog.accomplishmentData.id);
+                                    
+                                    if (error) throw error;
+                                    
+                                    toast({
+                                      title: "Success",
+                                      description: "File deleted successfully.",
+                                    });
+                                    
+                                    setIsActivityLogDetailOpen(false);
+                                    loadActivityLogs();
+                                  } catch (error) {
+                                    console.error('Error deleting file:', error);
+                                    toast({
+                                      title: "Error",
+                                      description: "Failed to delete file.",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Liquidation Report File */}
+                    {selectedActivityLog.liquidationData?.file_url && (
+                      <div className="p-4 border-2 border-dashed rounded-lg group hover:bg-gray-50 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-[#003b27]" />
+                              <p className="font-medium text-gray-800">Liquidation Report</p>
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                                selectedActivityLog.liquidationData.status === "Approved" ? "bg-green-100 text-green-800" :
+                                selectedActivityLog.liquidationData.status === "Pending" ? "bg-yellow-100 text-yellow-800" :
+                                selectedActivityLog.liquidationData.status === "For Revision" ? "bg-orange-100 text-orange-800" :
+                                selectedActivityLog.liquidationData.status === "Rejected" ? "bg-red-100 text-red-800" :
+                                "bg-blue-100 text-blue-800"
+                              }`}>
+                                {selectedActivityLog.liquidationData.status}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">{selectedActivityLog.liquidationData.file_name}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <a href={selectedActivityLog.liquidationData.file_url} target="_blank" rel="noopener noreferrer">
+                              <Button size="sm" style={{ backgroundColor: "#003b27" }}>
+                                <Download className="h-4 w-4 mr-1" />
+                                Open
+                              </Button>
+                            </a>
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              onClick={async () => {
+                                if (confirm('Are you sure you want to delete this file?')) {
+                                  try {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedActivityLog.liquidationData.id);
+                                    
+                                    if (error) throw error;
+                                    
+                                    toast({
+                                      title: "Success",
+                                      description: "File deleted successfully.",
+                                    });
+                                    
+                                    setIsActivityLogDetailOpen(false);
+                                    loadActivityLogs();
+                                  } catch (error) {
+                                    console.error('Error deleting file:', error);
+                                    toast({
+                                      title: "Error",
+                                      description: "Failed to delete file.",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Letter of Appeal File */}
+                    {selectedActivityLog.loaData?.file_url && (
+                      <div className="p-4 border-2 border-dashed rounded-lg group hover:bg-gray-50 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-[#003b27]" />
+                              <p className="font-medium text-gray-800">Letter of Appeal</p>
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                                selectedActivityLog.loaData.status === "Approved" ? "bg-green-100 text-green-800" :
+                                selectedActivityLog.loaData.status === "Pending" ? "bg-yellow-100 text-yellow-800" :
+                                selectedActivityLog.loaData.status === "For Revision" ? "bg-orange-100 text-orange-800" :
+                                selectedActivityLog.loaData.status === "Rejected" ? "bg-red-100 text-red-800" :
+                                "bg-blue-100 text-blue-800"
+                              }`}>
+                                {selectedActivityLog.loaData.status}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">{selectedActivityLog.loaData.file_name}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <a href={selectedActivityLog.loaData.file_url} target="_blank" rel="noopener noreferrer">
+                              <Button size="sm" style={{ backgroundColor: "#003b27" }}>
+                                <Download className="h-4 w-4 mr-1" />
+                                Open
+                              </Button>
+                            </a>
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              onClick={async () => {
+                                if (confirm('Are you sure you want to delete this file?')) {
+                                  try {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedActivityLog.loaData.id);
+                                    
+                                    if (error) throw error;
+                                    
+                                    toast({
+                                      title: "Success",
+                                      description: "File deleted successfully.",
+                                    });
+                                    
+                                    setIsActivityLogDetailOpen(false);
+                                    loadActivityLogs();
+                                  } catch (error) {
+                                    console.error('Error deleting file:', error);
+                                    toast({
+                                      title: "Error",
+                                      description: "Failed to delete file.",
+                                      variant: "destructive"
+                                    });
+                                  }
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Show message if no files */}
+                    {!selectedActivityLog.rtcData?.file_url && 
+                     !selectedActivityLog.accomplishmentData?.file_url && 
+                     !selectedActivityLog.liquidationData?.file_url && 
+                     !selectedActivityLog.loaData?.file_url && (
+                      <div className="p-8 text-center text-gray-400 border-2 border-dashed rounded-lg">
+                        <FileText className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                        <p className="text-sm">No files submitted yet</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Single File View - for non-grouped logs */}
+                {!selectedActivityLog.isGroupedView && selectedActivityLog.fileUrl && (
                   <div className="p-4 border-2 border-dashed rounded-lg">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -3145,19 +3510,55 @@ ${deadlineInfo}`;
                           </p>
                         </div>
                       </div>
-                      <a
-                        href={selectedActivityLog.fileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <Button 
-                          size="sm"
-                          style={{ backgroundColor: "#003b27" }}
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={selectedActivityLog.fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
                         >
-                          <Download className="h-4 w-4 mr-1" />
-                          Open Link
+                          <Button 
+                            size="sm"
+                            style={{ backgroundColor: "#003b27" }}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            Open Link
+                          </Button>
+                        </a>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={async () => {
+                            if (confirm('Are you sure you want to delete this file?')) {
+                              try {
+                                const { error } = await supabase
+                                  .from('submissions')
+                                  .delete()
+                                  .eq('id', selectedActivityLog.id);
+                                
+                                if (error) throw error;
+                                
+                                toast({
+                                  title: "Success",
+                                  description: "File deleted successfully.",
+                                });
+                                
+                                setIsActivityLogDetailOpen(false);
+                                loadActivityLogs();
+                              } catch (error) {
+                                console.error('Error deleting file:', error);
+                                toast({
+                                  title: "Error",
+                                  description: "Failed to delete file.",
+                                  variant: "destructive"
+                                });
+                              }
+                            }
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </Button>
-                      </a>
+                      </div>
                     </div>
                   </div>
                 )}
