@@ -8,6 +8,8 @@ import {
   User,
   ArrowLeft,
   X,
+  Search,
+  CheckCircle,
   Edit2,
   Menu,
   Eye,
@@ -56,6 +58,14 @@ import {
 } from "./ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import { format } from "date-fns";
 import AccountsPage from "./AccountsPage";
 import SubmissionsPage from "./SubmissionsPage";
 import CreateAccountPage from "./CreateAccountPage";
@@ -64,6 +74,7 @@ import { supabase } from "../lib/supabase";
 import { useToast } from "./ui/use-toast";
 import { COAAuditScheduleDisplay } from "./COAAuditScheduleDisplay";
 import { AuditDeadlineSummary } from "./AuditDeadlineSummary";
+import { DeleteConfirmationDialog } from "./DeleteConfirmationDialog";
 
 // Deadline Notification Component for OSLD
 const OSLDDeadlineNotification = ({ 
@@ -371,6 +382,12 @@ export default function OSLDDashboard() {
   const [templateLinks, setTemplateLinks] = useState<Record<string, { forms?: string }>>({});
   const [isInboxModalOpen, setIsInboxModalOpen] = useState(false);
   const [activeSubmissionTab, setActiveSubmissionTab] = useState<string>("Request to Conduct Activity");
+  
+  // All Submissions search and filter states
+  const [allSubmissionsSearch, setAllSubmissionsSearch] = useState("");
+  const [allSubmissionsOrgFilter, setAllSubmissionsOrgFilter] = useState<string>("ALL");
+  const [allSubmissionsTypeFilter, setAllSubmissionsTypeFilter] = useState<string>("ALL");
+  const [allSubmissionsStatusFilter, setAllSubmissionsStatusFilter] = useState<string>("ALL");
 
 
   // Event form state
@@ -382,6 +399,7 @@ export default function OSLDDashboard() {
   const [eventEndTime, setEventEndTime] = useState("");
   const [eventAllDay, setEventAllDay] = useState(false);
   const [eventRecurrence, setEventRecurrence] = useState("");
+  const [eventRecurrenceDay, setEventRecurrenceDay] = useState(""); // For "Every [Day]" selection
   const [eventTargetOrg, setEventTargetOrg] = useState("");
   const [eventRequireAccomplishment, setEventRequireAccomplishment] = useState(false);
   const [eventVenue, setEventVenue] = useState("");
@@ -453,11 +471,10 @@ export default function OSLDDashboard() {
 
   // Load activity logs function
   const loadActivityLogs = async () => {
-    // Fetch submissions: OSLD's own submissions OR submitted to OSLD OR approved by OSLD (endorsed to COA) OR endorsed to OSLD by COA
+    // Fetch ALL submissions from all organizations
     const { data } = await supabase
       .from('submissions')
       .select('*')
-      .or('organization.eq.OSLD,submitted_to.eq.OSLD,approved_by.eq.OSLD,endorsed_to_osld.eq.true')
       .order('submitted_at', { ascending: false });
     
     if (data) {
@@ -479,6 +496,7 @@ export default function OSLDDashboard() {
         coaOpinion: s.coa_opinion,
         coaComment: s.coa_comment,
         endorsedToOsld: s.endorsed_to_osld,
+        updated_at: s.updated_at,
         ...s
       })));
     }
@@ -509,6 +527,15 @@ export default function OSLDDashboard() {
   const [editContactPhone, setEditContactPhone] = useState("");
   const [deleteEventId, setDeleteEventId] = useState<string | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleteOfficerDialogOpen, setIsDeleteOfficerDialogOpen] = useState(false);
+  const [deleteOfficerId, setDeleteOfficerId] = useState<string | null>(null);
+  const [deleteOfficerName, setDeleteOfficerName] = useState<string>("");
+  const [isDeleteAdviserDialogOpen, setIsDeleteAdviserDialogOpen] = useState(false);
+  const [deleteAdviserId, setDeleteAdviserId] = useState<string | null>(null);
+  const [deleteAdviserName, setDeleteAdviserName] = useState<string>("");
+  const [isDeleteDocumentDialogOpen, setIsDeleteDocumentDialogOpen] = useState(false);
+  const [deleteDocumentId, setDeleteDocumentId] = useState<string | null>(null);
+  const [deleteDocumentName, setDeleteDocumentName] = useState<string>("");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [templateStatusMessage, setTemplateStatusMessage] = useState<{[key: string]: {accomplishment?: string, liquidation?: string}}>({});
   const [selectedOrganization, setSelectedOrganization] = useState(
@@ -559,11 +586,10 @@ export default function OSLDDashboard() {
 
   // Function to fetch activity logs
   const fetchActivityLogs = async () => {
-    // Fetch submissions: OSLD's own submissions OR submitted to OSLD OR approved by OSLD (endorsed to COA) OR endorsed to OSLD by COA
+    // Fetch ALL submissions from all organizations
     const { data } = await supabase
       .from('submissions')
       .select('*')
-      .or('organization.eq.OSLD,submitted_to.eq.OSLD,approved_by.eq.OSLD,endorsed_to_osld.eq.true')
       .order('submitted_at', { ascending: false });
     
     if (data) {
@@ -579,6 +605,7 @@ export default function OSLDDashboard() {
         revisionReason: s.revision_reason,
         rejectionReason: s.rejection_reason,
         approvedBy: s.approved_by || s.submitted_to,
+        updated_at: s.updated_at,
         ...s
       })));
     }
@@ -586,16 +613,19 @@ export default function OSLDDashboard() {
   const [selectedActivityLog, setSelectedActivityLog] = useState<any | null>(null);
   const [isActivityLogDetailOpen, setIsActivityLogDetailOpen] = useState(false);
   const [orgLogo, setOrgLogo] = useState<string>("");
+  const [logFilterType, setLogFilterType] = useState("all");
+  const [logFilterAction, setLogFilterAction] = useState("all");
+  const [logFilterDate, setLogFilterDate] = useState<Date | undefined>(undefined);
+  const [searchTerm, setSearchTerm] = useState("");
 
   // Fetch analytics data
   const fetchAnalyticsData = async () => {
     setIsRefreshingAnalytics(true);
     try {
-      // Fetch all submissions submitted to OSLD
+      // Fetch all submissions (regardless of where they were submitted)
       const { data: allSubmissions } = await supabase
         .from('submissions')
-        .select('submission_type, status, organization, endorsed_to_coa, endorsed_to_osld')
-        .eq('submitted_to', 'OSLD');
+        .select('submission_type, status, organization, endorsed_to_coa, endorsed_to_osld');
 
       // Fetch all events
       const { data: allEvents } = await supabase
@@ -772,7 +802,7 @@ export default function OSLDDashboard() {
         const formattedEvents: Event[] = [];
         
         // Helper function to check if a report has been approved
-        const checkReportApprovalStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation') => {
+        const checkReportApprovalStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
           const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
           
           const { data } = await supabase
@@ -783,8 +813,11 @@ export default function OSLDDashboard() {
           
           if (!data || data.length === 0) return false;
           
-          // Check if any submission is approved or was previously approved and deleted
-          const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+          // Check if the target organization's submission is approved or was previously approved and deleted
+          const hasApproved = data.some(s => 
+            (s.status === 'Approved' || s.status === 'Deleted (Previously Approved)') && 
+            s.organization === targetOrg
+          );
           return hasApproved;
         };
         
@@ -805,8 +838,8 @@ export default function OSLDDashboard() {
             requireLiquidation: e.require_liquidation,
             accomplishmentDeadlineOverride: e.accomplishment_deadline_override,
             liquidationDeadlineOverride: e.liquidation_deadline_override,
-            accomplishmentApproved: e.require_accomplishment ? await checkReportApprovalStatus(e.title, 'accomplishment') : false,
-            liquidationApproved: e.require_liquidation ? await checkReportApprovalStatus(e.title, 'liquidation') : false
+            accomplishmentApproved: e.require_accomplishment ? await checkReportApprovalStatus(e.title, 'accomplishment', e.target_organization) : false,
+            liquidationApproved: e.require_liquidation ? await checkReportApprovalStatus(e.title, 'liquidation', e.target_organization) : false
           });
           
           // OSLD does NOT have deadline events in their list - they just see red bg/dot in calendar for dates with deadlines
@@ -1261,6 +1294,7 @@ export default function OSLDDashboard() {
     setEventEndTime("");
     setEventAllDay(false);
     setEventRecurrence("");
+    setEventRecurrenceDay(""); // Reset day selection
     setEventVenue("");
     setEventTargetOrg("ALL");
     setEventRequireAccomplishment(false);
@@ -1324,6 +1358,8 @@ export default function OSLDDashboard() {
           all_day: eventAllDay,
           venue: eventVenue,
           target_organization: eventTargetOrg,
+          recurrence_type: eventRecurrence || null,
+          recurrence_day: eventRecurrenceDay || null,
           require_accomplishment: eventRequireAccomplishment,
           require_liquidation: eventRequireLiquidation
         })
@@ -1363,6 +1399,8 @@ export default function OSLDDashboard() {
         all_day: eventAllDay,
         venue: eventVenue,
         target_organization: eventTargetOrg,
+        recurrence_type: eventRecurrence || null,
+        recurrence_day: eventRecurrenceDay || null,
         require_accomplishment: eventRequireAccomplishment,
         require_liquidation: eventRequireLiquidation,
       };
@@ -1495,6 +1533,7 @@ ${deadlineInfo}`;
     setEventEndDate("");
     setEventAllDay(false);
     setEventRecurrence("");
+    setEventRecurrenceDay(""); // Reset day selection
     setEventVenue("");
     setEventTargetOrg("ALL");
     setEventRequireAccomplishment(false);
@@ -1635,17 +1674,27 @@ ${deadlineInfo}`;
     }
   };
 
-  const removeOfficer = async (id: string) => {
+  const confirmRemoveOfficer = (id: string, name: string) => {
+    setDeleteOfficerId(id);
+    setDeleteOfficerName(name);
+    setIsDeleteOfficerDialogOpen(true);
+  };
+
+  const removeOfficer = async () => {
+    if (!deleteOfficerId) return;
     try {
       const { error } = await supabase
         .from("org_officers")
         .delete()
-        .eq("id", id);
+        .eq("id", deleteOfficerId);
 
       if (error) throw error;
 
-      setOfficers(officers.filter((o) => o.id !== id));
+      setOfficers(officers.filter((o) => o.id !== deleteOfficerId));
       showNotif("Staff removed successfully");
+      setIsDeleteOfficerDialogOpen(false);
+      setDeleteOfficerId(null);
+      setDeleteOfficerName("");
     } catch (error: unknown) {
       console.error("Error removing staff:", error);
       showNotif("Failed to remove staff");
@@ -1759,17 +1808,27 @@ ${deadlineInfo}`;
     }
   };
 
-  const removeAdviser = async (id: string) => {
+  const confirmRemoveAdviser = (id: string, name: string) => {
+    setDeleteAdviserId(id);
+    setDeleteAdviserName(name);
+    setIsDeleteAdviserDialogOpen(true);
+  };
+
+  const removeAdviser = async () => {
+    if (!deleteAdviserId) return;
     try {
       const { error } = await supabase
         .from("org_officers")
         .delete()
-        .eq("id", id);
+        .eq("id", deleteAdviserId);
 
       if (error) throw error;
 
-      setAdvisers(advisers.filter((a) => a.id !== id));
+      setAdvisers(advisers.filter((a) => a.id !== deleteAdviserId));
       showNotif("Director removed successfully");
+      setIsDeleteAdviserDialogOpen(false);
+      setDeleteAdviserId(null);
+      setDeleteAdviserName("");
     } catch (error: unknown) {
       console.error("Error removing director:", error);
       showNotif("Failed to remove director");
@@ -1884,17 +1943,27 @@ ${deadlineInfo}`;
     }
   };
 
-  const handleDeleteDocument = async (documentId: string) => {
+  const confirmDeleteDocument = (documentId: string, documentName: string) => {
+    setDeleteDocumentId(documentId);
+    setDeleteDocumentName(documentName);
+    setIsDeleteDocumentDialogOpen(true);
+  };
+
+  const handleDeleteDocument = async () => {
+    if (!deleteDocumentId) return;
     try {
       const { error } = await supabase
         .from("org_documents")
         .delete()
-        .eq("id", documentId);
+        .eq("id", deleteDocumentId);
 
       if (error) throw error;
 
       await loadDocuments();
       showNotif("Document deleted successfully");
+      setIsDeleteDocumentDialogOpen(false);
+      setDeleteDocumentId(null);
+      setDeleteDocumentName("");
     } catch (error: unknown) {
       console.error("Error deleting document:", error);
       showNotif("Failed to delete document");
@@ -2388,11 +2457,230 @@ ${deadlineInfo}`;
             </h2>
             
             {/* Tabs for Activity Logs */}
-            <Tabs defaultValue="org-logs" className="w-full">
-              <TabsList className="grid w-full max-w-md grid-cols-2 mb-6">
+            <Tabs defaultValue="all-submissions" className="w-full">
+              <TabsList className="grid w-full max-w-2xl grid-cols-3 mb-6">
+                <TabsTrigger value="all-submissions" className="text-sm font-semibold">All Submissions</TabsTrigger>
                 <TabsTrigger value="org-logs" className="text-sm font-semibold">Org Act Logs</TabsTrigger>
                 <TabsTrigger value="coa-endorsed" className="text-sm font-semibold">COA's Endorsed</TabsTrigger>
               </TabsList>
+              
+              <TabsContent value="all-submissions">
+                {/* All Submissions from All Organizations */}
+                <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-900">All Organization Submissions</h3>
+                        <p className="text-sm text-gray-500 mt-1">Complete view of all submissions from all organizations</p>
+                      </div>
+                    </div>
+                    
+                    {/* Search and Filters */}
+                    <div className="mt-4 flex flex-col lg:flex-row gap-3">
+                      {/* Search Bar */}
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        <Input
+                          placeholder="Search by activity title..."
+                          value={allSubmissionsSearch}
+                          onChange={(e) => setAllSubmissionsSearch(e.target.value)}
+                          className="pl-10"
+                        />
+                      </div>
+                      
+                      {/* Organization Filter */}
+                      <Select
+                        value={allSubmissionsOrgFilter}
+                        onValueChange={setAllSubmissionsOrgFilter}
+                      >
+                        <SelectTrigger className="w-full lg:w-48">
+                          <SelectValue placeholder="Organization" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ALL">All Organizations</SelectItem>
+                          <SelectItem value="AO">Accredited Organizations</SelectItem>
+                          <SelectItem value="LSG">Local Student Government</SelectItem>
+                          <SelectItem value="GSC">Graduating Student Council</SelectItem>
+                          <SelectItem value="USED">University Student Enterprise Development</SelectItem>
+                          <SelectItem value="USG">University Student Government</SelectItem>
+                          <SelectItem value="LCO">League of Campus Organization</SelectItem>
+                          <SelectItem value="TGP">The Gold Panicles</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Type Filter */}
+                      <Select
+                        value={allSubmissionsTypeFilter}
+                        onValueChange={setAllSubmissionsTypeFilter}
+                      >
+                        <SelectTrigger className="w-full lg:w-48">
+                          <SelectValue placeholder="Type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ALL">All Types</SelectItem>
+                          <SelectItem value="Request to Conduct Activity">Request to Conduct</SelectItem>
+                          <SelectItem value="Accomplishment Report">Accomplishment Report</SelectItem>
+                          <SelectItem value="Liquidation Report">Liquidation Report</SelectItem>
+                          <SelectItem value="Monthly COA">Monthly COA</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Status Filter */}
+                      <Select
+                        value={allSubmissionsStatusFilter}
+                        onValueChange={setAllSubmissionsStatusFilter}
+                      >
+                        <SelectTrigger className="w-full lg:w-48">
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ALL">All Status</SelectItem>
+                          <SelectItem value="Submitted">Submitted</SelectItem>
+                          <SelectItem value="Pending">Pending</SelectItem>
+                          <SelectItem value="For Revision">For Revision</SelectItem>
+                          <SelectItem value="Approved">Approved</SelectItem>
+                          <SelectItem value="Rejected">Rejected</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Clear Filters Button */}
+                      {(allSubmissionsSearch || allSubmissionsOrgFilter !== "ALL" || allSubmissionsTypeFilter !== "ALL" || allSubmissionsStatusFilter !== "ALL") && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setAllSubmissionsSearch("");
+                            setAllSubmissionsOrgFilter("ALL");
+                            setAllSubmissionsTypeFilter("ALL");
+                            setAllSubmissionsStatusFilter("ALL");
+                          }}
+                          className="whitespace-nowrap"
+                        >
+                          <X className="h-4 w-4 mr-1" />
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Organization</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Activity Title</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">File</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Submitted</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Reviewed</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {(() => {
+                          // Filter to show submissions from all organizations
+                          let allOrgSubmissions = activityLogs.filter(log => 
+                            ['AO', 'LSG', 'GSC', 'USED', 'USG', 'LCO', 'TGP'].includes(log.organization)
+                          );
+                          
+                          // Apply search filter
+                          if (allSubmissionsSearch) {
+                            allOrgSubmissions = allOrgSubmissions.filter(log =>
+                              log.documentName.toLowerCase().includes(allSubmissionsSearch.toLowerCase()) ||
+                              log.type.toLowerCase().includes(allSubmissionsSearch.toLowerCase()) ||
+                              log.organization.toLowerCase().includes(allSubmissionsSearch.toLowerCase()) ||
+                              log.status.toLowerCase().includes(allSubmissionsSearch.toLowerCase())
+                            );
+                          }
+                          
+                          // Apply organization filter
+                          if (allSubmissionsOrgFilter !== "ALL") {
+                            allOrgSubmissions = allOrgSubmissions.filter(log =>
+                              log.organization === allSubmissionsOrgFilter
+                            );
+                          }
+                          
+                          // Apply type filter
+                          if (allSubmissionsTypeFilter !== "ALL") {
+                            allOrgSubmissions = allOrgSubmissions.filter(log =>
+                              log.type === allSubmissionsTypeFilter
+                            );
+                          }
+                          
+                          // Apply status filter
+                          if (allSubmissionsStatusFilter !== "ALL") {
+                            allOrgSubmissions = allOrgSubmissions.filter(log =>
+                              log.status === allSubmissionsStatusFilter
+                            );
+                          }
+                          
+                          if (allOrgSubmissions.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={7} className="px-6 py-8 text-center text-gray-500 italic">
+                                  {allSubmissionsSearch || allSubmissionsOrgFilter !== "ALL" || allSubmissionsTypeFilter !== "ALL" || allSubmissionsStatusFilter !== "ALL"
+                                    ? "No submissions match your filters."
+                                    : "No submissions from organizations yet."}
+                                </td>
+                              </tr>
+                            );
+                          }
+                          
+                          return allOrgSubmissions.map((log) => (
+                            <tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                                {{
+                                  "AO": "Accredited Organizations",
+                                  "LSG": "Local Student Government",
+                                  "GSC": "Graduating Student Council",
+                                  "LCO": "League of Campus Organization",
+                                  "USG": "University Student Government",
+                                  "TGP": "The Gold Panicles",
+                                  "USED": "University Student Enterprise Development"
+                                }[log.organization] || log.organization}
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-2">
+                                  <FileText className="h-4 w-4 text-gray-500" />
+                                  <span className="text-sm text-gray-900">{log.documentName}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-sm text-gray-600">
+                                {log.type}
+                              </td>
+                              <td className="px-6 py-4">
+                                {log.fileUrl ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-auto p-0 text-gray-700 hover:text-blue-700 hover:bg-transparent"
+                                    onClick={() => window.open(log.fileUrl, '_blank')}
+                                  >
+                                    <FileText className="h-4 w-4 mr-1" />
+                                    <span className="text-xs underline">{log.fileName}</span>
+                                  </Button>
+                                ) : (
+                                  <span className="text-xs text-gray-400">—</span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4 text-sm text-gray-500">{log.date}</td>
+                              <td className="px-6 py-4">
+                                <span className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(log.status)}`}>
+                                  {log.status === 'Approved' && log.approved_by ? `Approved by ${log.approved_by}` : log.status}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-sm text-gray-500">
+                                {(log.status === 'Approved' || log.status === 'For Revision') && log.updated_at 
+                                  ? new Date(log.updated_at).toLocaleDateString() 
+                                  : '—'}
+                              </td>
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </TabsContent>
               
               <TabsContent value="org-logs">
                 {/* Activity Logs - Organizations */}
@@ -2414,7 +2702,7 @@ ${deadlineInfo}`;
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {activityLogs.filter(log => log.organization !== 'OSLD' && !log.endorsedToOsld).length === 0 ? (
+                        {activityLogs.filter(log => (log.organization !== 'OSLD' && !log.endorsedToOsld) || log.submitted_to === 'COA' && (log.type === 'Accomplishment Report' || log.type === 'Liquidation Report' || log.type === 'Letter of Appeal')).length === 0 ? (
                           <tr>
                             <td colSpan={7} className="px-6 py-8 text-center text-gray-500 italic">
                               No submissions from other organizations yet.
@@ -2422,8 +2710,11 @@ ${deadlineInfo}`;
                           </tr>
                         ) : (
                           (() => {
-                            // Group filtered logs by activity title
-                            const filteredLogs = activityLogs.filter(log => log.organization !== 'OSLD' && !log.endorsedToOsld);
+                            // Group filtered logs by activity title (only AR, LR, LOA) - include COA submissions
+                            const filteredLogs = activityLogs.filter(log => 
+                              ((log.organization !== 'OSLD' && !log.endorsedToOsld) || log.submitted_to === 'COA') &&
+                              (log.type === 'Accomplishment Report' || log.type === 'Liquidation Report' || log.type === 'Letter of Appeal')
+                            );
                             const grouped: Record<string, { accomplishment?: any; liquidation?: any; organization?: string }> = {};
                             
                             filteredLogs.forEach(log => {
@@ -3245,14 +3536,28 @@ ${deadlineInfo}`;
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedActivityLog.rtcData.id);
-                                    
-                                    if (error) throw error;
+                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                    if (selectedActivityLog.rtcData.status === 'Approved') {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .update({
+                                          status: 'Deleted (Previously Approved)',
+                                          file_url: null,
+                                          file_name: null,
+                                          gdrive_link: null
+                                        })
+                                        .eq('id', selectedActivityLog.rtcData.id);
+                                      
+                                      if (error) throw error;
+                                    } else {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .delete()
+                                        .eq('id', selectedActivityLog.rtcData.id);
+                                      
+                                      if (error) throw error;
+                                    }
                                     
                                     toast({
                                       title: "Success",
@@ -3269,7 +3574,6 @@ ${deadlineInfo}`;
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3311,14 +3615,28 @@ ${deadlineInfo}`;
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedActivityLog.accomplishmentData.id);
-                                    
-                                    if (error) throw error;
+                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                    if (selectedActivityLog.accomplishmentData.status === 'Approved') {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .update({
+                                          status: 'Deleted (Previously Approved)',
+                                          file_url: null,
+                                          file_name: null,
+                                          gdrive_link: null
+                                        })
+                                        .eq('id', selectedActivityLog.accomplishmentData.id);
+                                      
+                                      if (error) throw error;
+                                    } else {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .delete()
+                                        .eq('id', selectedActivityLog.accomplishmentData.id);
+                                      
+                                      if (error) throw error;
+                                    }
                                     
                                     toast({
                                       title: "Success",
@@ -3335,7 +3653,6 @@ ${deadlineInfo}`;
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3377,14 +3694,28 @@ ${deadlineInfo}`;
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedActivityLog.liquidationData.id);
-                                    
-                                    if (error) throw error;
+                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                    if (selectedActivityLog.liquidationData.status === 'Approved') {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .update({
+                                          status: 'Deleted (Previously Approved)',
+                                          file_url: null,
+                                          file_name: null,
+                                          gdrive_link: null
+                                        })
+                                        .eq('id', selectedActivityLog.liquidationData.id);
+                                      
+                                      if (error) throw error;
+                                    } else {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .delete()
+                                        .eq('id', selectedActivityLog.liquidationData.id);
+                                      
+                                      if (error) throw error;
+                                    }
                                     
                                     toast({
                                       title: "Success",
@@ -3401,7 +3732,6 @@ ${deadlineInfo}`;
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3443,30 +3773,28 @@ ${deadlineInfo}`;
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
-                                  try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedActivityLog.loaData.id);
-                                    
-                                    if (error) throw error;
-                                    
-                                    toast({
-                                      title: "Success",
-                                      description: "File deleted successfully.",
-                                    });
-                                    
-                                    setIsActivityLogDetailOpen(false);
-                                    loadActivityLogs();
-                                  } catch (error) {
-                                    console.error('Error deleting file:', error);
-                                    toast({
-                                      title: "Error",
-                                      description: "Failed to delete file.",
-                                      variant: "destructive"
-                                    });
-                                  }
+                                try {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .delete()
+                                    .eq('id', selectedActivityLog.loaData.id);
+
+                                  if (error) throw error;
+
+                                  toast({
+                                    title: "Success",
+                                    description: "File deleted successfully.",
+                                  });
+
+                                  setIsActivityLogDetailOpen(false);
+                                  loadActivityLogs();
+                                } catch (error) {
+                                  console.error('Error deleting file:', error);
+                                  toast({
+                                    title: "Error",
+                                    description: "Failed to delete file.",
+                                    variant: "destructive",
+                                  });
                                 }
                               }}
                             >
@@ -3529,8 +3857,7 @@ ${deadlineInfo}`;
                           variant="ghost" 
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
                           onClick={async () => {
-                            if (confirm('Are you sure you want to delete this file?')) {
-                              try {
+                            try {
                                 const { error } = await supabase
                                   .from('submissions')
                                   .delete()
@@ -3553,7 +3880,6 @@ ${deadlineInfo}`;
                                   variant: "destructive"
                                 });
                               }
-                            }
                           }}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -3571,6 +3897,596 @@ ${deadlineInfo}`;
                 onClick={() => setIsActivityLogDetailOpen(false)}
               >
                 Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  // Render Activity Logs Section
+  if (activeNav === "Activity Logs") {
+    const getStatusColor = (status: string) => {
+      switch (status) {
+        case "Submitted":
+          return "bg-blue-100 text-blue-800";
+        case "Pending":
+          return "bg-yellow-100 text-yellow-800";
+        case "For Revision":
+          return "bg-orange-100 text-orange-800";
+        case "Approved":
+          return "bg-green-100 text-green-800";
+        case "Rejected":
+          return "bg-red-100 text-red-800";
+        default:
+          return "bg-gray-100 text-gray-800";
+      }
+    };
+
+    // Filter controls component
+    const FilterControls = (
+      <div className="flex flex-wrap gap-3 mb-4 p-4 bg-gray-50 rounded-lg">
+        <div className="relative flex-1 min-w-[200px] max-w-[300px]">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Input
+            type="text"
+            placeholder="Search by activity name, org, type, or status..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-9 h-9"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">Filter:</span>
+        </div>
+        <Select value={logFilterType} onValueChange={setLogFilterType}>
+          <SelectTrigger className="w-[180px] h-9">
+            <SelectValue placeholder="Filter by Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="Request to Conduct Activity">RTC</SelectItem>
+            <SelectItem value="Accomplishment Report">AR</SelectItem>
+            <SelectItem value="Liquidation Report">LR</SelectItem>
+            <SelectItem value="Letter of Appeal">LOA</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={logFilterAction} onValueChange={setLogFilterAction}>
+          <SelectTrigger className="w-[180px] h-9">
+            <SelectValue placeholder="Filter by Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="Approved">Approved</SelectItem>
+            <SelectItem value="Pending">Pending</SelectItem>
+            <SelectItem value="For Revision">For Revision</SelectItem>
+            <SelectItem value="Rejected">Rejected</SelectItem>
+          </SelectContent>
+        </Select>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="h-9 w-[180px] justify-start text-left font-normal">
+              <Calendar className="mr-2 h-4 w-4" />
+              {logFilterDate ? format(logFilterDate, "PPP") : "Filter by Date"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar
+              mode="single"
+              selected={logFilterDate}
+              onSelect={setLogFilterDate}
+              initialFocus
+            />
+          </PopoverContent>
+        </Popover>
+        {(logFilterType !== "all" || logFilterAction !== "all" || logFilterDate || searchTerm) && (
+          <Button 
+            variant="ghost" 
+            size="sm"
+            className="h-9 text-gray-500 hover:text-gray-700"
+            onClick={() => {
+              setLogFilterType("all");
+              setLogFilterAction("all");
+              setLogFilterDate(undefined);
+              setSearchTerm("");
+            }}
+          >
+            <X className="h-4 w-4 mr-1" />
+            Clear
+          </Button>
+        )}
+      </div>
+    );
+
+    // Group logs by activity title and type
+    const groupLogsByActivity = (logs: any[]) => {
+      const grouped: Record<string, { accomplishment?: any; liquidation?: any; rtc?: any; loa?: any }> = {};
+      
+      logs.forEach(log => {
+        const key = log.documentName;
+        if (!grouped[key]) {
+          grouped[key] = {};
+        }
+        
+        if (log.type === 'Accomplishment Report') {
+          grouped[key].accomplishment = log;
+        } else if (log.type === 'Liquidation Report') {
+          grouped[key].liquidation = log;
+        } else if (log.type === 'Request to Conduct Activity') {
+          grouped[key].rtc = log;
+        } else if (log.type === 'Letter of Appeal') {
+          grouped[key].loa = log;
+        }
+      });
+      
+      return grouped;
+    };
+
+    // Table component for logs
+    const LogsTable = ({ logs }: { logs: any[] }) => {
+      const groupedLogs = groupLogsByActivity(logs);
+      
+      return (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Document</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Organization</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">RTC Status</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">AR Status</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">LR Status</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">LOA Status</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {Object.keys(groupedLogs).length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-8 text-center text-gray-400 text-sm">
+                    No activity logs found.
+                  </td>
+                </tr>
+              ) : (
+                Object.entries(groupedLogs).map(([activityTitle, docs]) => {
+                  const log = docs.rtc || docs.accomplishment || docs.liquidation || docs.loa;
+                  if (!log) return null;
+                  
+                  return (
+                    <tr key={activityTitle} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-3 w-3 text-gray-500" />
+                          <span className="text-xs font-medium text-gray-900 truncate max-w-[150px]" title={activityTitle}>{activityTitle}</span>
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 text-xs text-gray-500">
+                        {{
+                          "OSLD": "OSLD",
+                          "AO": "AO",
+                          "LSG": "LSG",
+                          "GSC": "GSC",
+                          "LCO": "LCO",
+                          "USG": "USG",
+                          "TGP": "TGP",
+                          "USED": "USED"
+                        }[log.organization] || log.organization}
+                      </td>
+                      <td className="px-2 py-2">
+                        {docs.rtc ? (
+                          <div className="flex flex-col gap-0.5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto p-0 text-blue-600 hover:text-blue-700 hover:bg-transparent justify-start"
+                              onClick={() => window.open(docs.rtc.fileUrl, '_blank')}
+                            >
+                              <FileText className="h-2.5 w-2.5 mr-0.5" />
+                              <span className="text-[10px] underline truncate max-w-[60px]" title={docs.rtc.fileName}>{docs.rtc.fileName}</span>
+                            </Button>
+                            <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.rtc.status)}`}>
+                              {docs.rtc.status === 'Approved' && docs.rtc.approvedBy ? `✓ ${docs.rtc.approvedBy}` : 
+                               docs.rtc.status === 'For Revision' && docs.rtc.approvedBy ? `⚠️ Rev` : 
+                               docs.rtc.status === 'Pending' ? '⏳ Pending' :
+                               docs.rtc.status}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Not Sub.</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2">
+                        {docs.accomplishment ? (
+                          <div className="flex flex-col gap-0.5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto p-0 text-blue-600 hover:text-blue-700 hover:bg-transparent justify-start"
+                              onClick={() => window.open(docs.accomplishment.fileUrl, '_blank')}
+                            >
+                              <FileText className="h-2.5 w-2.5 mr-0.5" />
+                              <span className="text-[10px] underline truncate max-w-[60px]" title={docs.accomplishment.fileName}>{docs.accomplishment.fileName}</span>
+                            </Button>
+                            <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.accomplishment.status)}`}>
+                              {docs.accomplishment.status === 'Approved' && docs.accomplishment.approvedBy ? `✓ ${docs.accomplishment.approvedBy}` : 
+                               docs.accomplishment.status === 'For Revision' && docs.accomplishment.approvedBy ? `⚠️ Rev` : 
+                               docs.accomplishment.status === 'Pending' ? '⏳ Pending' :
+                               docs.accomplishment.status}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Not Sub.</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2">
+                        {docs.liquidation ? (
+                          <div className="flex flex-col gap-0.5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto p-0 text-blue-600 hover:text-blue-700 hover:bg-transparent justify-start"
+                              onClick={() => window.open(docs.liquidation.fileUrl, '_blank')}
+                            >
+                              <FileText className="h-2.5 w-2.5 mr-0.5" />
+                              <span className="text-[10px] underline truncate max-w-[60px]" title={docs.liquidation.fileName}>{docs.liquidation.fileName}</span>
+                            </Button>
+                            <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.liquidation.status)}`}>
+                              {docs.liquidation.status === 'Approved' && docs.liquidation.approvedBy ? `✓ ${docs.liquidation.approvedBy}` : 
+                               docs.liquidation.status === 'For Revision' && docs.liquidation.approvedBy ? `⚠️ Rev` : 
+                               docs.liquidation.status === 'Pending' ? '⏳ Pending' :
+                               docs.liquidation.status}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Not Sub.</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2">
+                        {docs.loa ? (
+                          <div className="flex flex-col gap-0.5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto p-0 text-blue-600 hover:text-blue-700 hover:bg-transparent justify-start"
+                              onClick={() => window.open(docs.loa.fileUrl, '_blank')}
+                            >
+                              <FileText className="h-2.5 w-2.5 mr-0.5" />
+                              <span className="text-[10px] underline truncate max-w-[60px]" title={docs.loa.fileName}>{docs.loa.fileName}</span>
+                            </Button>
+                            <span className={`inline-flex w-fit px-1.5 py-0.5 rounded-full text-[9px] font-medium ${getStatusColor(docs.loa.status)}`}>
+                              {docs.loa.status === 'Approved' && docs.loa.approvedBy ? `✓ ${docs.loa.approvedBy}` : 
+                               docs.loa.status === 'For Revision' && docs.loa.approvedBy ? `⚠️ Rev` : 
+                               docs.loa.status === 'Pending' ? '⏳ Pending' :
+                               docs.loa.status}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Not Sub.</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-[10px] text-gray-500">{log.date}</td>
+                      <td className="px-2 py-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[10px]"
+                          onClick={async () => {
+                            // Fetch all submissions for this document
+                            const { data: allSubmissions } = await supabase
+                              .from('submissions')
+                              .select('*')
+                              .eq('activity_title', activityTitle)
+                              .eq('organization', log.organization);
+                            
+                            const groupedData: any = {
+                              ...log,
+                              isGroupedView: true,
+                              allSubmissions: allSubmissions || []
+                            };
+                            
+                            // Group by type
+                            allSubmissions?.forEach(sub => {
+                              if (sub.submission_type === 'Request to Conduct Activity') {
+                                groupedData.rtcData = sub;
+                              } else if (sub.submission_type === 'Accomplishment Report') {
+                                groupedData.accomplishmentData = sub;
+                              } else if (sub.submission_type === 'Liquidation Report') {
+                                groupedData.liquidationData = sub;
+                              } else if (sub.submission_type === 'Letter of Appeal') {
+                                groupedData.loaData = sub;
+                              }
+                            });
+                            
+                            setSelectedActivityLog(groupedData);
+                            setIsActivityLogDetailOpen(true);
+                          }}
+                        >
+                          <Eye className="h-3 w-3 mr-0.5" />
+                          View
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      );
+    };
+
+    // Apply filters
+    const filteredLogs = activityLogs.filter(log => {
+      // Type filter
+      if (logFilterType !== "all" && log.type !== logFilterType) return false;
+      
+      // Status filter
+      if (logFilterAction !== "all" && log.status !== logFilterAction) return false;
+      
+      // Date filter
+      if (logFilterDate) {
+        const logDate = new Date(log.date);
+        const filterDate = new Date(logFilterDate);
+        if (logDate.toDateString() !== filterDate.toDateString()) return false;
+      }
+      
+      // Search filter
+      if (searchTerm) {
+        const searchLower = searchTerm.toLowerCase();
+        return (
+          log.documentName.toLowerCase().includes(searchLower) ||
+          log.type.toLowerCase().includes(searchLower) ||
+          log.status.toLowerCase().includes(searchLower) ||
+          log.organization.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      return true;
+    });
+
+    return (
+      <div className="flex flex-col lg:flex-row h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        {/* Mobile Menu Button */}
+        <Button
+          className="lg:hidden fixed top-4 left-4 z-50 rounded-full w-12 h-12 shadow-lg"
+          style={{ backgroundColor: "#003b27" }}
+          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        >
+          <Menu className="h-6 w-6" style={{ color: "#d4af37" }} />
+        </Button>
+
+        {/* Sidebar */}
+        <div
+          className={`${
+            isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+          } lg:translate-x-0 fixed lg:relative w-72 h-full text-white flex flex-col shadow-xl transition-transform duration-300 z-40`}
+          style={{ backgroundColor: "#003b27" }}
+        >
+          <div className="p-5 border-b border-white/10">
+            <div className="flex items-center gap-4">
+              <div
+                className={`flex-shrink-0 ${orgLogo ? 'w-14 h-14' : 'w-12 h-12'} rounded-full overflow-hidden shadow-lg ring-2 ring-offset-1 ring-offset-[#003b27] flex items-center justify-center bg-white/10`}
+                style={{ ringColor: "#d4af37" }}
+              >
+                {orgLogo ? (
+                  <img
+                    src={orgLogo}
+                    alt="Organization Logo"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Building2 className="w-6 h-6" style={{ color: "#d4af37" }} />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl font-bold leading-tight" style={{ color: "#d4af37" }}>
+                  OSLD
+                </h1>
+                <p className="text-xs text-white/60 mt-1">Office of Student Leadership and Development</p>
+              </div>
+            </div>
+          </div>
+
+          <nav className="flex-1 px-4 py-6">
+            {[
+              "Dashboard",
+              "Accounts",
+              "Submissions",
+              "Form Templates",
+              "Create Account",
+              "Activity Logs",
+              "Director & Staff",
+              "Organizations",
+            ].map((item) => (
+              <Button
+                key={item}
+                onClick={() => {
+                  setActiveNav(item);
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full justify-start mb-2 text-left font-semibold transition-all whitespace-normal text-sm leading-tight py-3 h-auto ${
+                  activeNav === item
+                    ? "text-[#003b27]"
+                    : "text-white hover:bg-[#d4af37] hover:text-[#003b27]"
+                }`}
+                style={
+                  activeNav === item ? { backgroundColor: "#d4af37" } : undefined
+                }
+                variant={activeNav === item ? "default" : "ghost"}
+              >
+                {item}
+              </Button>
+            ))}
+            
+            <Button
+              onClick={() => setIsLogoutDialogOpen(true)}
+              className="w-full justify-start mb-2 text-left font-semibold transition-all text-white hover:bg-red-600"
+              variant="ghost"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </Button>
+          </nav>
+        </div>
+
+        {/* Overlay for mobile */}
+        {isMobileMenuOpen && (
+          <div
+            className="lg:hidden fixed inset-0 bg-black/50 z-30"
+            onClick={() => setIsMobileMenuOpen(false)}
+          ></div>
+        )}
+
+        {/* Main Content */}
+        <div className="flex-1 overflow-auto pt-16 lg:pt-0">
+          <div className="p-4 lg:p-8">
+            <div className="mb-6">
+              <h2
+                className="text-3xl font-bold mb-2"
+                style={{ color: "#003b27" }}
+              >
+                Activity Logs
+              </h2>
+              <p className="text-gray-600">
+                View all submission activities from all organizations
+              </p>
+            </div>
+
+            {/* Filter Controls */}
+            {FilterControls}
+
+            {/* Tabs for different submission types */}
+            <Tabs defaultValue="all" className="w-full">
+              <TabsList className="grid w-full grid-cols-5 mb-4">
+                <TabsTrigger value="all">All Submissions</TabsTrigger>
+                <TabsTrigger value="rtc">Request to Conduct</TabsTrigger>
+                <TabsTrigger value="ar-lr">AR/LR Reports</TabsTrigger>
+                <TabsTrigger value="loa">Letters of Appeal</TabsTrigger>
+                <TabsTrigger value="stats">Statistics</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="all">
+                <Card className="p-6">
+                  <LogsTable logs={filteredLogs} />
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="rtc">
+                <Card className="p-6">
+                  <LogsTable logs={filteredLogs.filter(log => log.type === 'Request to Conduct Activity')} />
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="ar-lr">
+                <Card className="p-6">
+                  <LogsTable logs={filteredLogs.filter(log => log.type === 'Accomplishment Report' || log.type === 'Liquidation Report')} />
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="loa">
+                <Card className="p-6">
+                  <LogsTable logs={filteredLogs.filter(log => log.type === 'Letter of Appeal')} />
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="stats">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <Card className="p-6 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-blue-600">Total Submissions</p>
+                        <p className="text-3xl font-bold text-blue-900 mt-1">{activityLogs.length}</p>
+                      </div>
+                      <FileText className="h-12 w-12 text-blue-400" />
+                    </div>
+                  </Card>
+
+                  <Card className="p-6 bg-gradient-to-br from-green-50 to-green-100 border-green-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-green-600">Approved</p>
+                        <p className="text-3xl font-bold text-green-900 mt-1">
+                          {activityLogs.filter(log => log.status === 'Approved').length}
+                        </p>
+                      </div>
+                      <CheckCircle className="h-12 w-12 text-green-400" />
+                    </div>
+                  </Card>
+
+                  <Card className="p-6 bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-yellow-600">Pending</p>
+                        <p className="text-3xl font-bold text-yellow-900 mt-1">
+                          {activityLogs.filter(log => log.status === 'Pending').length}
+                        </p>
+                      </div>
+                      <Clock className="h-12 w-12 text-yellow-400" />
+                    </div>
+                  </Card>
+
+                  <Card className="p-6 bg-gradient-to-br from-red-50 to-red-100 border-red-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-red-600">For Revision</p>
+                        <p className="text-3xl font-bold text-red-900 mt-1">
+                          {activityLogs.filter(log => log.status === 'For Revision').length}
+                        </p>
+                      </div>
+                      <AlertTriangle className="h-12 w-12 text-red-400" />
+                    </div>
+                  </Card>
+
+                  {/* Organizations breakdown */}
+                  <Card className="p-6 md:col-span-2 lg:col-span-4">
+                    <h3 className="text-lg font-bold mb-4" style={{ color: "#003b27" }}>Submissions by Organization</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {["AO", "LSG", "GSC", "LCO", "USG", "TGP", "USED", "OSLD"].map(org => (
+                        <div key={org} className="p-4 bg-gray-50 rounded-lg border">
+                          <p className="text-xs font-medium text-gray-600">{org}</p>
+                          <p className="text-2xl font-bold text-gray-900 mt-1">
+                            {activityLogs.filter(log => log.organization === org).length}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+        </div>
+
+        {/* Logout Confirmation Dialog */}
+        <Dialog open={isLogoutDialogOpen} onOpenChange={setIsLogoutDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-2xl" style={{ color: "#003b27" }}>
+                Confirm Logout
+              </DialogTitle>
+            </DialogHeader>
+            <div className="py-4">
+              <p className="text-base text-gray-700">
+                Are you sure you want to logout?
+              </p>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setIsLogoutDialogOpen(false)}
+                className="flex-1"
+              >
+                No
+              </Button>
+              <Button
+                onClick={handleLogout}
+                className="flex-1"
+                style={{ backgroundColor: "#003b27" }}
+              >
+                Yes, Logout
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -3770,6 +4686,14 @@ ${deadlineInfo}`;
                             >
                               Edit
                             </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => confirmRemoveAdviser(adviser.id, adviser.name)}
+                              className="border-2 font-medium border-red-500 text-red-500 hover:bg-red-50"
+                            >
+                              Remove
+                            </Button>
                           </div>
                         </div>
                       </div>
@@ -3862,7 +4786,7 @@ ${deadlineInfo}`;
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => removeOfficer(officer.id)}
+                              onClick={() => confirmRemoveOfficer(officer.id, officer.name)}
                               className="border-2 font-medium border-red-500 text-red-500 hover:bg-red-50"
                             >
                               Remove
@@ -4925,7 +5849,7 @@ ${deadlineInfo}`;
                             </a>
                             <button
                               type="button"
-                              onClick={() => handleDeleteDocument(doc.id)}
+                              onClick={() => confirmDeleteDocument(doc.id, doc.file_name)}
                               className="text-red-500 hover:text-red-700 text-sm font-medium"
                             >
                               Delete
@@ -4985,7 +5909,7 @@ ${deadlineInfo}`;
                             </a>
                             <button
                               type="button"
-                              onClick={() => handleDeleteDocument(doc.id)}
+                              onClick={() => confirmDeleteDocument(doc.id, doc.file_name)}
                               className="text-red-500 hover:text-red-700 text-sm font-medium"
                             >
                               Delete
@@ -5045,7 +5969,7 @@ ${deadlineInfo}`;
                             </a>
                             <button
                               type="button"
-                              onClick={() => handleDeleteDocument(doc.id)}
+                              onClick={() => confirmDeleteDocument(doc.id, doc.file_name)}
                               className="text-red-500 hover:text-red-700 text-sm font-medium"
                             >
                               Delete
@@ -6643,7 +7567,10 @@ ${deadlineInfo}`;
               <Label>Recurrence Type (Optional)</Label>
               <select
                 value={eventRecurrence}
-                onChange={(e) => setEventRecurrence(e.target.value)}
+                onChange={(e) => {
+                  setEventRecurrence(e.target.value);
+                  setEventRecurrenceDay(""); // Reset day selection when changing type
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#003b27] text-base"
               >
                 <option value="">None</option>
@@ -6657,6 +7584,27 @@ ${deadlineInfo}`;
                 <option value="2nd Semester">2nd Semester</option>
               </select>
             </div>
+
+            {/* Day of Week Selection - Only for Weekly recurrence */}
+            {eventRecurrence === "Weekly" && (
+              <div>
+                <Label>Select Day of Week</Label>
+                <select
+                  value={eventRecurrenceDay}
+                  onChange={(e) => setEventRecurrenceDay(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#003b27] text-base"
+                >
+                  <option value="">-- Select a day --</option>
+                  <option value="Monday">Every Monday</option>
+                  <option value="Tuesday">Every Tuesday</option>
+                  <option value="Wednesday">Every Wednesday</option>
+                  <option value="Thursday">Every Thursday</option>
+                  <option value="Friday">Every Friday</option>
+                  <option value="Saturday">Every Saturday</option>
+                  <option value="Sunday">Every Sunday</option>
+                </select>
+              </div>
+            )}
             {!eventAllDay && (
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -6995,6 +7943,37 @@ ${deadlineInfo}`;
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialogs */}
+      <DeleteConfirmationDialog
+        open={isDeleteOfficerDialogOpen}
+        onOpenChange={setIsDeleteOfficerDialogOpen}
+        title="Delete Officer"
+        description="Are you sure you want to delete this officer? This action cannot be undone."
+        itemName={deleteOfficerName}
+        onConfirm={removeOfficer}
+        isDangerous={true}
+      />
+
+      <DeleteConfirmationDialog
+        open={isDeleteAdviserDialogOpen}
+        onOpenChange={setIsDeleteAdviserDialogOpen}
+        title="Delete Director"
+        description="Are you sure you want to delete this director? This action cannot be undone."
+        itemName={deleteAdviserName}
+        onConfirm={removeAdviser}
+        isDangerous={true}
+      />
+
+      <DeleteConfirmationDialog
+        open={isDeleteDocumentDialogOpen}
+        onOpenChange={setIsDeleteDocumentDialogOpen}
+        title="Delete Document"
+        description="Are you sure you want to delete this document? This action cannot be undone."
+        itemName={deleteDocumentName}
+        onConfirm={handleDeleteDocument}
+        isDangerous={true}
+      />
     </div>
   );
 }

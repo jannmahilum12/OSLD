@@ -1,4 +1,4 @@
-import { useState, useEffect, memo, useCallback, useMemo } from "react";
+import React, { useState, useEffect, memo, useCallback, useMemo } from "react";
 import {
   Plus,
   ChevronLeft,
@@ -724,7 +724,9 @@ function AODashboard({
                 (s.event_id === e.id || s.activity_title === e.title) &&
                 s.submission_type === 'Accomplishment Report',
             );
-            const hasApprovedAccom = accomSubmission?.status === 'Approved' || accomSubmission?.status === 'Deleted (Previously Approved)';
+            // Only hide deadline if the CORRECT org's submission is approved
+            const hasApprovedAccom = (accomSubmission?.status === 'Approved' || accomSubmission?.status === 'Deleted (Previously Approved)') &&
+              accomSubmission?.organization === e.target_organization;
             // Mark as pending if:
             // - It's the current org's OWN submission (Pending status)
             // - OR it's a submission by the target org that this org monitors (LCO monitors AO, USG monitors LSG)
@@ -739,7 +741,9 @@ function AODashboard({
                 (s.event_id === e.id || s.activity_title === e.title) &&
                 s.submission_type === 'Liquidation Report',
             );
-            const hasApprovedLiq = liqSubmission?.status === 'Approved' || liqSubmission?.status === 'Deleted (Previously Approved)';
+            // Only hide deadline if the CORRECT org's submission is approved
+            const hasApprovedLiq = (liqSubmission?.status === 'Approved' || liqSubmission?.status === 'Deleted (Previously Approved)') &&
+              liqSubmission?.organization === e.target_organization;
             // Mark as pending if:
             // - It's the current org's OWN submission (Pending status)
             // - OR it's a submission by the target org that this org monitors (LCO monitors AO, USG monitors LSG)
@@ -1020,6 +1024,7 @@ function AODashboard({
         (payload) => {
           console.log('📝 Submissions changed:', payload);
           loadActivityLogs();
+          loadEvents(); // Refresh deadlines when submissions change
         }
       )
       .subscribe();
@@ -3679,7 +3684,7 @@ function AODashboard({
     };
 
     // COA-specific Filter controls component (only AR, LR, LOA and Pending, For Revision, Declined)
-    const COAFilterControls = () => (
+    const COAFilterControls = (
       <div className="flex flex-wrap gap-3 mb-4 p-4 bg-gray-50 rounded-lg">
         <div className="relative flex-1 min-w-[200px] max-w-[300px]">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -3687,7 +3692,7 @@ function AODashboard({
             type="text"
             placeholder="Search by activity name, type, or status..."
             value={searchTerm}
-            onInput={(e) => setSearchTerm((e.target as HTMLInputElement).value)}
+            onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-9 h-9"
           />
         </div>
@@ -3752,7 +3757,7 @@ function AODashboard({
     );
 
     // Filter controls component
-    const FilterControls = () => (
+    const FilterControls = (
       <div className="flex flex-wrap gap-3 mb-4 p-4 bg-gray-50 rounded-lg">
         <div className="relative flex-1 min-w-[200px] max-w-[300px]">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -4332,7 +4337,7 @@ function AODashboard({
                 <div className="px-6 py-4 bg-[#003b27]">
                   <h3 className="text-lg font-semibold text-white">Org Activity Logs</h3>
                 </div>
-                <COAFilterControls />
+                {COAFilterControls}
                 <LogsTable logs={coaOrgActivityLogs} showOrganization />
               </div>
             ) : (
@@ -4374,10 +4379,26 @@ function AODashboard({
                               <AlertDialogAction
                                 onClick={async () => {
                                   try {
+                                    // Step 1: Soft-delete approved Accomplishment/Liquidation submissions
+                                    // to prevent deadlines from reappearing in the calendar
+                                    await supabase
+                                      .from("submissions")
+                                      .update({
+                                        status: 'Deleted (Previously Approved)',
+                                        file_url: null,
+                                        file_name: null,
+                                        gdrive_link: null
+                                      })
+                                      .eq("organization", orgShortName)
+                                      .eq("status", "Approved")
+                                      .in("submission_type", ["Accomplishment Report", "Liquidation Report"]);
+
+                                    // Step 2: Hard-delete all remaining non-soft-deleted submissions
                                     const { error } = await supabase
                                       .from("submissions")
                                       .delete()
-                                      .eq("organization", orgShortName);
+                                      .eq("organization", orgShortName)
+                                      .neq("status", "Deleted (Previously Approved)");
 
                                     if (error) throw error;
 
@@ -4412,7 +4433,7 @@ function AODashboard({
                         </AlertDialog>
                       )}
                     </div>
-                    <FilterControls />
+                    {FilterControls}
                     <LogsTable logs={myLogs} />
                   </div>
                 </TabsContent>
@@ -4423,7 +4444,7 @@ function AODashboard({
                       <div className="px-6 py-4 bg-[#003b27]">
                         <h3 className="text-lg font-semibold text-white">Other Organizations' Logs</h3>
                       </div>
-                      <FilterControls />
+                      {FilterControls}
                       <LogsTable logs={otherOrgLogs} showOrganization showEndorseButton />
                     </div>
                   </TabsContent>
@@ -4600,14 +4621,28 @@ function AODashboard({
                             variant="ghost" 
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             onClick={async () => {
-                              if (confirm('Are you sure you want to delete this file?')) {
                                 try {
-                                  const { error } = await supabase
-                                    .from('submissions')
-                                    .delete()
-                                    .eq('id', selectedLog.rtcData.id);
-                                  
-                                  if (error) throw error;
+                                  // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                  if (selectedLog.rtcData.status === 'Approved') {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .update({
+                                        status: 'Deleted (Previously Approved)',
+                                        file_url: null,
+                                        file_name: null,
+                                        gdrive_link: null
+                                      })
+                                      .eq('id', selectedLog.rtcData.id);
+                                    
+                                    if (error) throw error;
+                                  } else {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedLog.rtcData.id);
+                                    
+                                    if (error) throw error;
+                                  }
                                   
                                   toast({
                                     title: "Success",
@@ -4624,7 +4659,6 @@ function AODashboard({
                                     variant: "destructive"
                                   });
                                 }
-                              }
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -4659,14 +4693,28 @@ function AODashboard({
                             variant="ghost" 
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             onClick={async () => {
-                              if (confirm('Are you sure you want to delete this file?')) {
                                 try {
-                                  const { error } = await supabase
-                                    .from('submissions')
-                                    .delete()
-                                    .eq('id', selectedLog.accomplishmentData?.id || selectedLog.id);
-                                  
-                                  if (error) throw error;
+                                  // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                  if ((selectedLog.accomplishmentData?.status || selectedLog.status) === 'Approved') {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .update({
+                                        status: 'Deleted (Previously Approved)',
+                                        file_url: null,
+                                        file_name: null,
+                                        gdrive_link: null
+                                      })
+                                      .eq('id', selectedLog.accomplishmentData?.id || selectedLog.id);
+                                    
+                                    if (error) throw error;
+                                  } else {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedLog.accomplishmentData?.id || selectedLog.id);
+                                    
+                                    if (error) throw error;
+                                  }
                                   
                                   toast({
                                     title: "Success",
@@ -4683,7 +4731,6 @@ function AODashboard({
                                     variant: "destructive"
                                   });
                                 }
-                              }
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -4718,14 +4765,28 @@ function AODashboard({
                             variant="ghost" 
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             onClick={async () => {
-                              if (confirm('Are you sure you want to delete this file?')) {
                                 try {
-                                  const { error } = await supabase
-                                    .from('submissions')
-                                    .delete()
-                                    .eq('id', selectedLog.liquidationData?.id || selectedLog.id);
-                                  
-                                  if (error) throw error;
+                                  // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                  if ((selectedLog.liquidationData?.status || selectedLog.status) === 'Approved') {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .update({
+                                        status: 'Deleted (Previously Approved)',
+                                        file_url: null,
+                                        file_name: null,
+                                        gdrive_link: null
+                                      })
+                                      .eq('id', selectedLog.liquidationData?.id || selectedLog.id);
+                                    
+                                    if (error) throw error;
+                                  } else {
+                                    const { error } = await supabase
+                                      .from('submissions')
+                                      .delete()
+                                      .eq('id', selectedLog.liquidationData?.id || selectedLog.id);
+                                    
+                                    if (error) throw error;
+                                  }
                                   
                                   toast({
                                     title: "Success",
@@ -4742,7 +4803,6 @@ function AODashboard({
                                     variant: "destructive"
                                   });
                                 }
-                              }
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -4777,8 +4837,8 @@ function AODashboard({
                             variant="ghost" 
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             onClick={async () => {
-                              if (confirm('Are you sure you want to delete this file?')) {
                                 try {
+                                  // Letter of Appeal doesn't need the approved check since it's not tied to calendar deadlines
                                   const { error } = await supabase
                                     .from('submissions')
                                     .delete()
@@ -4801,7 +4861,6 @@ function AODashboard({
                                     variant: "destructive"
                                   });
                                 }
-                              }
                             }}
                           >
                             <Trash2 className="h-4 w-4" />

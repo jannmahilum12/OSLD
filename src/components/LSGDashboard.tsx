@@ -68,6 +68,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { DeleteConfirmationDialog } from "./DeleteConfirmationDialog";
 
 interface Event {
   id: string;
@@ -631,6 +632,10 @@ export default function LSGDashboard() {
   const [isLogDetailOpen, setIsLogDetailOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [logToDelete, setLogToDelete] = useState<any>(null);
+  
+  // Document delete confirmation state
+  const [isDeleteDocumentDialogOpen, setIsDeleteDocumentDialogOpen] = useState(false);
+  const [documentToDelete, setDocumentToDelete] = useState<{ id: string; name: string } | null>(null);
   const [hasMissedDeadline, setHasMissedDeadline] = useState(false);
   const [activityLogsTab, setActivityLogsTab] = useState<"my-logs" | "ar-lr" | "request" | "appeal">("my-logs");
 
@@ -829,6 +834,155 @@ export default function LSGDashboard() {
     loadEvents();
   }, []);
 
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
+  }, []);
+
   // Load user data
   useEffect(() => {
     const loadUserData = async () => {
@@ -852,6 +1006,155 @@ export default function LSGDashboard() {
       }
     };
     loadUserData();
+  }, []);
+
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
   }, []);
 
   // Load uploaded templates from Supabase
@@ -912,6 +1215,155 @@ export default function LSGDashboard() {
     loadTemplates();
   }, []);
 
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
+  }, []);
+
   // Check for pending submissions
   useEffect(() => {
     const checkPendingSubmission = async () => {
@@ -931,6 +1383,155 @@ export default function LSGDashboard() {
       }
     };
     checkPendingSubmission();
+  }, []);
+
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
   }, []);
 
   // Load activity logs
@@ -1009,6 +1610,174 @@ export default function LSGDashboard() {
     };
     loadActivityLogs();
   }, [events]);
+
+  // Set up real-time subscription for submissions to refresh deadlines
+  useEffect(() => {
+    const submissionsChannel = supabase
+      .channel('lsg-submissions-realtime')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'submissions' }, 
+        (payload) => {
+          console.log('📝 LSG Submissions changed:', payload);
+          // Trigger reload of events to refresh deadlines
+          window.dispatchEvent(new Event('lsg-deadlines-refresh'));
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      submissionsChannel.unsubscribe();
+    };
+  }, []);
+
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
+  }, []);
 
   // Reload activity logs function
   const reloadActivityLogs = async () => {
@@ -1168,6 +1937,155 @@ export default function LSGDashboard() {
     loadDocuments();
   }, []);
 
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
+  }, []);
+
   const handleSaveProfile = async () => {
     try {
       // Upload budget proposal files
@@ -1233,12 +2151,19 @@ export default function LSGDashboard() {
     }
   };
 
-  const handleDeleteDocument = async (docId: string) => {
+  const confirmDeleteDocument = (docId: string, docName: string) => {
+    setDocumentToDelete({ id: docId, name: docName });
+    setIsDeleteDocumentDialogOpen(true);
+  };
+
+  const handleDeleteDocument = async () => {
+    if (!documentToDelete) return;
+    
     try {
-      const { error } = await supabase
+      const { error} = await supabase
         .from("org_documents")
         .delete()
-        .eq("id", docId);
+        .eq("id", documentToDelete.id);
 
       if (error) throw error;
 
@@ -1247,6 +2172,8 @@ export default function LSGDashboard() {
         title: "Success",
         description: "Document deleted successfully!",
       });
+      setIsDeleteDocumentDialogOpen(false);
+      setDocumentToDelete(null);
     } catch (error: unknown) {
       console.error("Error deleting document:", error);
       toast({
@@ -1644,6 +2571,155 @@ export default function LSGDashboard() {
     };
 
     loadOfficersAndAdvisers();
+  }, []);
+
+  // Listen for deadline refresh events from real-time submissions
+  useEffect(() => {
+    const handleRefresh = () => {
+      // Reload events when submissions change
+      const loadEvents = async () => {
+        try {
+          const { data: eventsData } = await supabase
+            .from('osld_events')
+            .select('*, accomplishment_deadline_override, liquidation_deadline_override');
+          
+          if (eventsData) {
+            const formattedEvents: Event[] = [];
+            
+            // Helper function to check submission status
+            const checkSubmissionStatus = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg?: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('organization', 'LSG');
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved' || s.status === 'Deleted (Previously Approved)');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+
+            // Helper function to check AO submissions
+            const checkAOSubmissionForLSG = async (eventTitle: string, reportType: 'accomplishment' | 'liquidation', targetOrg: string) => {
+              const submissionType = reportType === 'accomplishment' ? 'Accomplishment Report' : 'Liquidation Report';
+              let reviewingOrg = 'LCO';
+              if (targetOrg === 'LSG') {
+                reviewingOrg = 'USG';
+              }
+              const { data } = await supabase
+                .from('submissions')
+                .select('status, organization, submitted_to')
+                .eq('activity_title', eventTitle)
+                .eq('submission_type', submissionType)
+                .eq('submitted_to', reviewingOrg);
+              
+              if (!data || data.length === 0) return 'no_submission';
+              const hasApproved = data.some(s => s.status === 'Approved');
+              if (hasApproved) return 'approved';
+              const hasPending = data.some(s => s.status === 'Pending' || s.status === 'For Revision');
+              if (hasPending) return 'pending';
+              return 'no_submission';
+            };
+            
+            for (const e of eventsData) {
+              formattedEvents.push({
+                id: e.id,
+                title: e.title,
+                description: e.description,
+                startDate: e.start_date,
+                endDate: e.end_date,
+                startTime: e.start_time,
+                endTime: e.end_time,
+                allDay: e.all_day,
+                venue: e.venue,
+                targetOrganization: e.target_organization,
+                requireAccomplishment: e.require_accomplishment,
+                requireLiquidation: e.require_liquidation
+              });
+              
+              const shouldShowDeadline = e.target_organization === 'AO' || e.target_organization === 'LSG' || e.target_organization === 'USG';
+              
+              if (shouldShowDeadline && e.end_date) {
+                if (e.require_accomplishment) {
+                  const accomStatus = await checkSubmissionStatus(e.title, 'accomplishment', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'accomplishment', e.target_organization);
+                  
+                  if (accomStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const accomDeadlineDate = e.accomplishment_deadline_override || calculateDeadlineDate(e.end_date, 3);
+                    formattedEvents.push({
+                      id: `${e.id}-accom-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for accomplishment report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted an accomplishment report. Please check and review it in the Submissions page.`
+                            : accomStatus === 'pending' 
+                              ? `You already submitted an accomplishment report, please wait for further updates`
+                              : `Due date for accomplishment report for "${e.title}"`,
+                      startDate: accomDeadlineDate,
+                      endDate: accomDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'accomplishment',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.accomplishment_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : accomStatus
+                    });
+                  }
+                }
+                
+                if (e.require_liquidation) {
+                  const liqStatus = await checkSubmissionStatus(e.title, 'liquidation', e.target_organization);
+                  const aoSubmissionStatus = await checkAOSubmissionForLSG(e.title, 'liquidation', e.target_organization);
+                  
+                  if (liqStatus !== 'approved' && aoSubmissionStatus !== 'approved') {
+                    const liqDeadlineDate = e.liquidation_deadline_override || calculateDeadlineDate(e.end_date, 5);
+                    formattedEvents.push({
+                      id: `${e.id}-liq-deadline`,
+                      title: e.title,
+                      description: e.target_organization === 'AO' && aoSubmissionStatus === 'pending'
+                        ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                        : e.target_organization === 'AO' && aoSubmissionStatus !== 'pending'
+                          ? `Due date for liquidation report for "${e.title}" (Notify Organization)`
+                          : aoSubmissionStatus === 'pending'
+                            ? `An organization has submitted a liquidation report. Please check and review it in the Submissions page.`
+                            : liqStatus === 'pending'
+                              ? `You already submitted a liquidation report, please wait for further updates`
+                              : `Due date for liquidation report for "${e.title}"`,
+                      startDate: liqDeadlineDate,
+                      endDate: liqDeadlineDate,
+                      allDay: true,
+                      isDeadline: true,
+                      deadlineType: 'liquidation',
+                      parentEventId: e.id,
+                      targetOrganization: e.target_organization,
+                      hasOverride: !!e.liquidation_deadline_override,
+                      submissionStatus: aoSubmissionStatus === 'pending' ? 'pending_review' : liqStatus
+                    });
+                  }
+                }
+              }
+            }
+            
+            setEvents(formattedEvents);
+          }
+        } catch (error: unknown) {
+          console.error('Error loading events:', error);
+        }
+      };
+      loadEvents();
+    };
+
+    window.addEventListener('lsg-deadlines-refresh', handleRefresh);
+    return () => window.removeEventListener('lsg-deadlines-refresh', handleRefresh);
   }, []);
 
   const navItems = [
@@ -2972,10 +4048,26 @@ export default function LSGDashboard() {
                       <AlertDialogAction
                         onClick={async () => {
                           try {
+                            // Step 1: Soft-delete approved Accomplishment/Liquidation submissions
+                            // to prevent deadlines from reappearing in the calendar
+                            await supabase
+                              .from("submissions")
+                              .update({
+                                status: 'Deleted (Previously Approved)',
+                                file_url: null,
+                                file_name: null,
+                                gdrive_link: null
+                              })
+                              .eq("organization", "LSG")
+                              .eq("status", "Approved")
+                              .in("submission_type", ["Accomplishment Report", "Liquidation Report"]);
+
+                            // Step 2: Hard-delete all remaining non-soft-deleted submissions
                             const { error } = await supabase
                               .from("submissions")
                               .delete()
-                              .eq("organization", "LSG");
+                              .eq("organization", "LSG")
+                              .neq("status", "Deleted (Previously Approved)");
 
                             if (error) throw error;
 
@@ -3353,14 +4445,28 @@ export default function LSGDashboard() {
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedLog.rtcData.id);
-                                    
-                                    if (error) throw error;
+                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                    if (selectedLog.rtcData.status === 'Approved') {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .update({
+                                          status: 'Deleted (Previously Approved)',
+                                          file_url: null,
+                                          file_name: null,
+                                          gdrive_link: null
+                                        })
+                                        .eq('id', selectedLog.rtcData.id);
+                                      
+                                      if (error) throw error;
+                                    } else {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .delete()
+                                        .eq('id', selectedLog.rtcData.id);
+                                      
+                                      if (error) throw error;
+                                    }
                                     
                                     toast({
                                       title: "Success",
@@ -3369,7 +4475,7 @@ export default function LSGDashboard() {
                                     
                                     setIsLogDetailOpen(false);
                                     reloadActivityLogs();
-                                  } catch (error) {
+                                   } catch (error) {
                                     console.error('Error deleting file:', error);
                                     toast({
                                       title: "Error",
@@ -3377,7 +4483,6 @@ export default function LSGDashboard() {
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3412,14 +4517,28 @@ export default function LSGDashboard() {
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedLog.accomplishmentData.id);
-                                    
-                                    if (error) throw error;
+                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                    if (selectedLog.accomplishmentData.status === 'Approved') {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .update({
+                                          status: 'Deleted (Previously Approved)',
+                                          file_url: null,
+                                          file_name: null,
+                                          gdrive_link: null
+                                        })
+                                        .eq('id', selectedLog.accomplishmentData.id);
+                                      
+                                      if (error) throw error;
+                                    } else {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .delete()
+                                        .eq('id', selectedLog.accomplishmentData.id);
+                                      
+                                      if (error) throw error;
+                                    }
                                     
                                     toast({
                                       title: "Success",
@@ -3428,7 +4547,7 @@ export default function LSGDashboard() {
                                     
                                     setIsLogDetailOpen(false);
                                     reloadActivityLogs();
-                                  } catch (error) {
+                                   } catch (error) {
                                     console.error('Error deleting file:', error);
                                     toast({
                                       title: "Error",
@@ -3436,7 +4555,6 @@ export default function LSGDashboard() {
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3471,14 +4589,28 @@ export default function LSGDashboard() {
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
-                                    const { error } = await supabase
-                                      .from('submissions')
-                                      .delete()
-                                      .eq('id', selectedLog.liquidationData.id);
-                                    
-                                    if (error) throw error;
+                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
+                                    if (selectedLog.liquidationData.status === 'Approved') {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .update({
+                                          status: 'Deleted (Previously Approved)',
+                                          file_url: null,
+                                          file_name: null,
+                                          gdrive_link: null
+                                        })
+                                        .eq('id', selectedLog.liquidationData.id);
+                                      
+                                      if (error) throw error;
+                                    } else {
+                                      const { error } = await supabase
+                                        .from('submissions')
+                                        .delete()
+                                        .eq('id', selectedLog.liquidationData.id);
+                                      
+                                      if (error) throw error;
+                                    }
                                     
                                     toast({
                                       title: "Success",
@@ -3487,7 +4619,7 @@ export default function LSGDashboard() {
                                     
                                     setIsLogDetailOpen(false);
                                     reloadActivityLogs();
-                                  } catch (error) {
+                                   } catch (error) {
                                     console.error('Error deleting file:', error);
                                     toast({
                                       title: "Error",
@@ -3495,7 +4627,6 @@ export default function LSGDashboard() {
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3530,8 +4661,8 @@ export default function LSGDashboard() {
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={async () => {
-                                if (confirm('Are you sure you want to delete this file?')) {
                                   try {
+                                    // Letter of Appeal doesn't need the approved check since it's not tied to calendar deadlines
                                     const { error } = await supabase
                                       .from('submissions')
                                       .delete()
@@ -3546,7 +4677,7 @@ export default function LSGDashboard() {
                                     
                                     setIsLogDetailOpen(false);
                                     reloadActivityLogs();
-                                  } catch (error) {
+                                   } catch (error) {
                                     console.error('Error deleting file:', error);
                                     toast({
                                       title: "Error",
@@ -3554,7 +4685,6 @@ export default function LSGDashboard() {
                                       variant: "destructive"
                                     });
                                   }
-                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -3603,14 +4733,28 @@ export default function LSGDashboard() {
                           variant="ghost" 
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
                           onClick={async () => {
-                            if (confirm('Are you sure you want to delete this file?')) {
-                              try {
-                                const { error } = await supabase
-                                  .from('submissions')
-                                  .delete()
-                                  .eq('id', selectedLog.id);
-                                
-                                if (error) throw error;
+                            try {
+                                // Check if submission was approved - if so, mark as deleted instead of removing
+                                if ((selectedLog.status === 'Approved') && (selectedLog.type === 'Accomplishment Report' || selectedLog.type === 'Liquidation Report')) {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .update({
+                                      status: 'Deleted (Previously Approved)',
+                                      file_url: null,
+                                      file_name: null,
+                                      gdrive_link: null
+                                    })
+                                    .eq('id', selectedLog.id);
+                                  
+                                  if (error) throw error;
+                                } else {
+                                  const { error } = await supabase
+                                    .from('submissions')
+                                    .delete()
+                                    .eq('id', selectedLog.id);
+                                  
+                                  if (error) throw error;
+                                }
                                 
                                 toast({
                                   title: "Success",
@@ -3627,7 +4771,6 @@ export default function LSGDashboard() {
                                   variant: "destructive"
                                 });
                               }
-                            }
                           }}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -3916,7 +5059,7 @@ export default function LSGDashboard() {
                           </a>
                           <button
                             type="button"
-                            onClick={() => handleDeleteDocument(doc.id)}
+                            onClick={() => confirmDeleteDocument(doc.id, doc.file_name)}
                             className="text-red-500 hover:text-red-700 text-sm font-medium"
                           >
                             Delete
@@ -4001,7 +5144,7 @@ export default function LSGDashboard() {
                           </a>
                           <button
                             type="button"
-                            onClick={() => handleDeleteDocument(doc.id)}
+                            onClick={() => confirmDeleteDocument(doc.id, doc.file_name)}
                             className="text-red-500 hover:text-red-700 text-sm font-medium"
                           >
                             Delete
@@ -4961,6 +6104,17 @@ export default function LSGDashboard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Document Confirmation Dialog */}
+      <DeleteConfirmationDialog
+        open={isDeleteDocumentDialogOpen}
+        onOpenChange={setIsDeleteDocumentDialogOpen}
+        title="Delete Document"
+        description="Are you sure you want to delete this document? This action cannot be undone."
+        itemName={documentToDelete?.name}
+        onConfirm={handleDeleteDocument}
+      />
+
       <Toaster />
     </div>
   );
