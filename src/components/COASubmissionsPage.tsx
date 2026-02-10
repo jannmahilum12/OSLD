@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
-import { FileText, Clock, Building2, ExternalLink, MessageSquare, Eye, CheckCircle2, Folder, ChevronRight, ChevronDown, Calendar } from "lucide-react";
+import { FileText, Clock, Building2, ExternalLink, MessageSquare, Eye, CheckCircle2, Folder, ChevronRight, ChevronDown, Calendar, Send } from "lucide-react";
 
 interface Submission {
   id: string;
@@ -288,7 +288,8 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
             coa_reviewed: true,
             coa_reviewed_at: new Date().toISOString(),
             endorsed_to_coa: true,
-            audit_type: auditTypeInfo.display_text // Store full audit type display text
+            audit_type: auditTypeInfo.display_text, // Store full audit type display text
+            semester: auditTypeInfo.semester // Store semester separately for queries
           });
 
         if (insertError) throw insertError;
@@ -397,7 +398,8 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
               <TableHead className="text-gray-700 font-semibold">ACCOMPLISHMENT</TableHead>
               <TableHead className="text-gray-700 font-semibold">LIQUIDATION</TableHead>
               <TableHead className="text-gray-700 font-semibold">DATE SUBMITTED</TableHead>
-              <TableHead className="text-gray-700 font-semibold">DATE REVIEWED</TableHead>
+              <TableHead className="text-gray-700 font-semibold">OVERALL ACTION</TableHead>
+              <TableHead className="text-gray-700 font-semibold">OVERALL COMMENT</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -446,15 +448,15 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                     year: 'numeric'
                   })}
                 </TableCell>
-                <TableCell className="text-gray-600">
-                  {(docs.accomplishment || docs.liquidation)?.coa_reviewed_at 
-                    ? new Date((docs.accomplishment || docs.liquidation)!.coa_reviewed_at!).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric'
-                      })
-                    : 'N/A'
-                  }
+                <TableCell>
+                  <div className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-gray-700 text-sm">
+                    {(docs.accomplishment || docs.liquidation)?.coa_opinion || 'N/A'}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-gray-700 text-sm max-w-xs truncate" title={(docs.accomplishment || docs.liquidation)?.coa_comment || 'No comment'}>
+                    {(docs.accomplishment || docs.liquidation)?.coa_comment || 'No comment'}
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -781,7 +783,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                               </button>
                                               
                                               {isInitialExpanded && (
-                                                <div className="p-2 bg-white">
+                                                <div className="p-4 bg-white">
                                                   {(() => {
                                                     // Determine semester based on key (1st or 2nd)
                                                     const semester = semesterKey.includes('-1st') ? '1st' : '2nd';
@@ -802,23 +804,157 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                     }
                                                     
                                                     return (
-                                                      <div className="space-y-1">
-                                                        {copies.map((copy) => (
-                                                          <div key={copy.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded border border-gray-100">
-                                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                              <FileText className="h-3 w-3 text-blue-500 flex-shrink-0" />
-                                                              <span className="text-xs text-gray-700 truncate">{copy.file_name}</span>
-                                                            </div>
-                                                            <a
-                                                              href={copy.file_url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="text-blue-600 hover:text-blue-800 flex-shrink-0 ml-2"
-                                                            >
-                                                              <ExternalLink className="h-3 w-3" />
-                                                            </a>
-                                                          </div>
-                                                        ))}
+                                                      <div className="space-y-3">
+                                                        {(() => {
+                                                          // Get the submission that was reviewed (prefer accomplishment if both exist)
+                                                          const reviewedSubmission = copies.length > 0 
+                                                            ? submissions.find(s => s.id === copies[0].submission_id && s.submission_type === "Accomplishment Report") ||
+                                                              submissions.find(s => s.id === copies[0].submission_id)
+                                                            : null;
+                                                            
+                                                          if (reviewedSubmission) {
+                                                            const isEndorsed = reviewedSubmission.endorsed_to_osld;
+                                                            
+                                                            return (
+                                                              <div className="border-b pb-3 space-y-2">
+                                                                <div className="flex items-start justify-between">
+                                                                  <div className="flex-1">
+                                                                    {reviewedSubmission.coa_reviewed_at && (
+                                                                      <div className="text-xs text-gray-600 mb-2">
+                                                                        <span className="font-semibold">Reviewed on:</span> {new Date(reviewedSubmission.coa_reviewed_at).toLocaleDateString('en-US', {
+                                                                          month: 'short',
+                                                                          day: 'numeric',
+                                                                          year: 'numeric'
+                                                                        })}
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_opinion && (
+                                                                      <div className="mb-2">
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Opinion: </span>
+                                                                        <span className="text-sm text-gray-900">
+                                                                          {reviewedSubmission.coa_opinion}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_comment && (
+                                                                      <div>
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Comment: </span>
+                                                                        <span className="text-sm text-gray-700">
+                                                                          {reviewedSubmission.coa_comment}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                  </div>
+                                                                  <Button
+                                                                    size="sm"
+                                                                    className={`ml-4 ${isEndorsed ? 'bg-gray-400 hover:bg-gray-400 cursor-not-allowed' : 'bg-[#0F4229] hover:bg-[#0d3821]'}`}
+                                                                    disabled={isEndorsed}
+                                                                    onClick={async () => {
+                                                                      try {
+                                                                        const { error } = await supabase
+                                                                          .from('submissions')
+                                                                          .update({ endorsed_to_osld: true })
+                                                                          .eq('id', reviewedSubmission.id);
+                                                                        
+                                                                        if (error) throw error;
+                                                                        
+                                                                        toast({
+                                                                          title: "Success",
+                                                                          description: "Successfully endorsed to OSLD",
+                                                                        });
+                                                                        
+                                                                        // Refresh data
+                                                                        fetchSubmissions();
+                                                                      } catch (error) {
+                                                                        console.error('Error endorsing to OSLD:', error);
+                                                                        toast({
+                                                                          title: "Error",
+                                                                          description: "Failed to endorse to OSLD",
+                                                                          variant: "destructive",
+                                                                        });
+                                                                      }
+                                                                    }}
+                                                                  >
+                                                                    <Send className="h-3 w-3 mr-1" />
+                                                                    {isEndorsed ? 'Endorsed' : 'Endorse to OSLD'}
+                                                                  </Button>
+                                                                </div>
+                                                              </div>
+                                                            );
+                                                          }
+                                                          return null;
+                                                        })()}
+                                                        
+                                                        <Table>
+                                                          <TableHeader>
+                                                            <TableRow className="bg-gray-50 hover:bg-gray-50">
+                                                              <TableHead className="text-gray-700 font-semibold">Document</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Accomplishment</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Liquidation</TableHead>
+                                                            </TableRow>
+                                                          </TableHeader>
+                                                          <TableBody>
+                                                            {(() => {
+                                                              const groupedByActivity: Record<string, { accomplishment?: typeof copies[0]; liquidation?: typeof copies[0] }> = {};
+                                                              copies.forEach((copy) => {
+                                                                const originalSubmission = submissions.find(s => s.id === copy.submission_id);
+                                                                if (originalSubmission) {
+                                                                  const title = originalSubmission.activity_title;
+                                                                  if (!groupedByActivity[title]) {
+                                                                    groupedByActivity[title] = {};
+                                                                  }
+                                                                  if (originalSubmission.submission_type === "Accomplishment Report") {
+                                                                    groupedByActivity[title].accomplishment = copy;
+                                                                  } else if (originalSubmission.submission_type === "Liquidation Report") {
+                                                                    groupedByActivity[title].liquidation = copy;
+                                                                  }
+                                                                }
+                                                              });
+                                                              
+                                                              return Object.entries(groupedByActivity).map(([title, docs]) => {
+                                                                return (
+                                                                  <TableRow key={title} className="hover:bg-gray-50">
+                                                                    <TableCell className="font-medium">
+                                                                      <div className="flex items-center gap-2">
+                                                                        {title}
+                                                                      </div>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.accomplishment ? (
+                                                                        <a
+                                                                          href={docs.accomplishment.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.liquidation ? (
+                                                                        <a
+                                                                          href={docs.liquidation.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                  </TableRow>
+                                                                );
+                                                              });
+                                                            })()}
+                                                          </TableBody>
+                                                        </Table>
                                                       </div>
                                                     );
                                                   })()}
@@ -861,7 +997,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                               </button>
                                               
                                               {isFinalExpanded && (
-                                                <div className="p-2 bg-white">
+                                                <div className="p-4 bg-white">
                                                   {(() => {
                                                     // Determine semester based on key (1st or 2nd)
                                                     const semester = semesterKey.includes('-1st') ? '1st' : '2nd';
@@ -882,23 +1018,157 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                     }
                                                     
                                                     return (
-                                                      <div className="space-y-1">
-                                                        {copies.map((copy) => (
-                                                          <div key={copy.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded border border-gray-100">
-                                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                              <FileText className="h-3 w-3 text-green-500 flex-shrink-0" />
-                                                              <span className="text-xs text-gray-700 truncate">{copy.file_name}</span>
-                                                            </div>
-                                                            <a
-                                                              href={copy.file_url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="text-blue-600 hover:text-blue-800 flex-shrink-0 ml-2"
-                                                            >
-                                                              <ExternalLink className="h-3 w-3" />
-                                                            </a>
-                                                          </div>
-                                                        ))}
+                                                      <div className="space-y-3">
+                                                        {(() => {
+                                                          // Get the submission that was reviewed (prefer accomplishment if both exist)
+                                                          const reviewedSubmission = copies.length > 0 
+                                                            ? submissions.find(s => s.id === copies[0].submission_id && s.submission_type === "Accomplishment Report") ||
+                                                              submissions.find(s => s.id === copies[0].submission_id)
+                                                            : null;
+                                                            
+                                                          if (reviewedSubmission) {
+                                                            const isEndorsed = reviewedSubmission.endorsed_to_osld;
+                                                            
+                                                            return (
+                                                              <div className="border-b pb-3 space-y-2">
+                                                                <div className="flex items-start justify-between">
+                                                                  <div className="flex-1">
+                                                                    {reviewedSubmission.coa_reviewed_at && (
+                                                                      <div className="text-xs text-gray-600 mb-2">
+                                                                        <span className="font-semibold">Reviewed on:</span> {new Date(reviewedSubmission.coa_reviewed_at).toLocaleDateString('en-US', {
+                                                                          month: 'short',
+                                                                          day: 'numeric',
+                                                                          year: 'numeric'
+                                                                        })}
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_opinion && (
+                                                                      <div className="mb-2">
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Opinion: </span>
+                                                                        <span className="text-sm text-gray-900">
+                                                                          {reviewedSubmission.coa_opinion}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_comment && (
+                                                                      <div>
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Comment: </span>
+                                                                        <span className="text-sm text-gray-700">
+                                                                          {reviewedSubmission.coa_comment}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                  </div>
+                                                                  <Button
+                                                                    size="sm"
+                                                                    className={`ml-4 ${isEndorsed ? 'bg-gray-400 hover:bg-gray-400 cursor-not-allowed' : 'bg-[#0F4229] hover:bg-[#0d3821]'}`}
+                                                                    disabled={isEndorsed}
+                                                                    onClick={async () => {
+                                                                      try {
+                                                                        const { error } = await supabase
+                                                                          .from('submissions')
+                                                                          .update({ endorsed_to_osld: true })
+                                                                          .eq('id', reviewedSubmission.id);
+                                                                        
+                                                                        if (error) throw error;
+                                                                        
+                                                                        toast({
+                                                                          title: "Success",
+                                                                          description: "Successfully endorsed to OSLD",
+                                                                        });
+                                                                        
+                                                                        // Refresh data
+                                                                        loadSubmissions();
+                                                                      } catch (error) {
+                                                                        console.error('Error endorsing to OSLD:', error);
+                                                                        toast({
+                                                                          title: "Error",
+                                                                          description: "Failed to endorse to OSLD",
+                                                                          variant: "destructive",
+                                                                        });
+                                                                      }
+                                                                    }}
+                                                                  >
+                                                                    <Send className="h-3 w-3 mr-1" />
+                                                                    {isEndorsed ? 'Endorsed' : 'Endorse to OSLD'}
+                                                                  </Button>
+                                                                </div>
+                                                              </div>
+                                                            );
+                                                          }
+                                                          return null;
+                                                        })()}
+                                                        
+                                                        <Table>
+                                                          <TableHeader>
+                                                            <TableRow className="bg-gray-50 hover:bg-gray-50">
+                                                              <TableHead className="text-gray-700 font-semibold">Document</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Accomplishment</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Liquidation</TableHead>
+                                                            </TableRow>
+                                                          </TableHeader>
+                                                          <TableBody>
+                                                            {(() => {
+                                                              const groupedByActivity: Record<string, { accomplishment?: typeof copies[0]; liquidation?: typeof copies[0] }> = {};
+                                                              copies.forEach((copy) => {
+                                                                const originalSubmission = submissions.find(s => s.id === copy.submission_id);
+                                                                if (originalSubmission) {
+                                                                  const title = originalSubmission.activity_title;
+                                                                  if (!groupedByActivity[title]) {
+                                                                    groupedByActivity[title] = {};
+                                                                  }
+                                                                  if (originalSubmission.submission_type === "Accomplishment Report") {
+                                                                    groupedByActivity[title].accomplishment = copy;
+                                                                  } else if (originalSubmission.submission_type === "Liquidation Report") {
+                                                                    groupedByActivity[title].liquidation = copy;
+                                                                  }
+                                                                }
+                                                              });
+                                                              
+                                                              return Object.entries(groupedByActivity).map(([title, docs]) => {
+                                                                return (
+                                                                  <TableRow key={title} className="hover:bg-gray-50">
+                                                                    <TableCell className="font-medium">
+                                                                      <div className="flex items-center gap-2">
+                                                                        {title}
+                                                                      </div>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.accomplishment ? (
+                                                                        <a
+                                                                          href={docs.accomplishment.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.liquidation ? (
+                                                                        <a
+                                                                          href={docs.liquidation.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                  </TableRow>
+                                                                );
+                                                              });
+                                                            })()}
+                                                          </TableBody>
+                                                        </Table>
                                                       </div>
                                                     );
                                                   })()}
@@ -980,7 +1250,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                               </button>
                                               
                                               {isInitialExpanded && (
-                                                <div className="p-2 bg-white">
+                                                <div className="p-4 bg-white">
                                                   {(() => {
                                                     // Determine semester based on key (1st or 2nd)
                                                     const semester = semesterKey.includes('-1st') ? '1st' : '2nd';
@@ -1001,23 +1271,157 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                     }
                                                     
                                                     return (
-                                                      <div className="space-y-1">
-                                                        {copies.map((copy) => (
-                                                          <div key={copy.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded border border-gray-100">
-                                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                              <FileText className="h-3 w-3 text-blue-500 flex-shrink-0" />
-                                                              <span className="text-xs text-gray-700 truncate">{copy.file_name}</span>
-                                                            </div>
-                                                            <a
-                                                              href={copy.file_url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="text-blue-600 hover:text-blue-800 flex-shrink-0 ml-2"
-                                                            >
-                                                              <ExternalLink className="h-3 w-3" />
-                                                            </a>
-                                                          </div>
-                                                        ))}
+                                                      <div className="space-y-3">
+                                                        {(() => {
+                                                          // Get the submission that was reviewed (prefer accomplishment if both exist)
+                                                          const reviewedSubmission = copies.length > 0 
+                                                            ? submissions.find(s => s.id === copies[0].submission_id && s.submission_type === "Accomplishment Report") ||
+                                                              submissions.find(s => s.id === copies[0].submission_id)
+                                                            : null;
+                                                            
+                                                          if (reviewedSubmission) {
+                                                            const isEndorsed = reviewedSubmission.endorsed_to_osld;
+                                                            
+                                                            return (
+                                                              <div className="border-b pb-3 space-y-2">
+                                                                <div className="flex items-start justify-between">
+                                                                  <div className="flex-1">
+                                                                    {reviewedSubmission.coa_reviewed_at && (
+                                                                      <div className="text-xs text-gray-600 mb-2">
+                                                                        <span className="font-semibold">Reviewed on:</span> {new Date(reviewedSubmission.coa_reviewed_at).toLocaleDateString('en-US', {
+                                                                          month: 'short',
+                                                                          day: 'numeric',
+                                                                          year: 'numeric'
+                                                                        })}
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_opinion && (
+                                                                      <div className="mb-2">
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Opinion: </span>
+                                                                        <span className="text-sm text-gray-900">
+                                                                          {reviewedSubmission.coa_opinion}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_comment && (
+                                                                      <div>
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Comment: </span>
+                                                                        <span className="text-sm text-gray-700">
+                                                                          {reviewedSubmission.coa_comment}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                  </div>
+                                                                  <Button
+                                                                    size="sm"
+                                                                    className={`ml-4 ${isEndorsed ? 'bg-gray-400 hover:bg-gray-400 cursor-not-allowed' : 'bg-[#0F4229] hover:bg-[#0d3821]'}`}
+                                                                    disabled={isEndorsed}
+                                                                    onClick={async () => {
+                                                                      try {
+                                                                        const { error } = await supabase
+                                                                          .from('submissions')
+                                                                          .update({ endorsed_to_osld: true })
+                                                                          .eq('id', reviewedSubmission.id);
+                                                                        
+                                                                        if (error) throw error;
+                                                                        
+                                                                        toast({
+                                                                          title: "Success",
+                                                                          description: "Successfully endorsed to OSLD",
+                                                                        });
+                                                                        
+                                                                        // Refresh data
+                                                                        fetchSubmissions();
+                                                                      } catch (error) {
+                                                                        console.error('Error endorsing to OSLD:', error);
+                                                                        toast({
+                                                                          title: "Error",
+                                                                          description: "Failed to endorse to OSLD",
+                                                                          variant: "destructive",
+                                                                        });
+                                                                      }
+                                                                    }}
+                                                                  >
+                                                                    <Send className="h-3 w-3 mr-1" />
+                                                                    {isEndorsed ? 'Endorsed' : 'Endorse to OSLD'}
+                                                                  </Button>
+                                                                </div>
+                                                              </div>
+                                                            );
+                                                          }
+                                                          return null;
+                                                        })()}
+                                                        
+                                                        <Table>
+                                                          <TableHeader>
+                                                            <TableRow className="bg-gray-50 hover:bg-gray-50">
+                                                              <TableHead className="text-gray-700 font-semibold">Document</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Accomplishment</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Liquidation</TableHead>
+                                                            </TableRow>
+                                                          </TableHeader>
+                                                          <TableBody>
+                                                            {(() => {
+                                                              const groupedByActivity: Record<string, { accomplishment?: typeof copies[0]; liquidation?: typeof copies[0] }> = {};
+                                                              copies.forEach((copy) => {
+                                                                const originalSubmission = submissions.find(s => s.id === copy.submission_id);
+                                                                if (originalSubmission) {
+                                                                  const title = originalSubmission.activity_title;
+                                                                  if (!groupedByActivity[title]) {
+                                                                    groupedByActivity[title] = {};
+                                                                  }
+                                                                  if (originalSubmission.submission_type === "Accomplishment Report") {
+                                                                    groupedByActivity[title].accomplishment = copy;
+                                                                  } else if (originalSubmission.submission_type === "Liquidation Report") {
+                                                                    groupedByActivity[title].liquidation = copy;
+                                                                  }
+                                                                }
+                                                              });
+                                                              
+                                                              return Object.entries(groupedByActivity).map(([title, docs]) => {
+                                                                return (
+                                                                  <TableRow key={title} className="hover:bg-gray-50">
+                                                                    <TableCell className="font-medium">
+                                                                      <div className="flex items-center gap-2">
+                                                                        {title}
+                                                                      </div>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.accomplishment ? (
+                                                                        <a
+                                                                          href={docs.accomplishment.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.liquidation ? (
+                                                                        <a
+                                                                          href={docs.liquidation.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                  </TableRow>
+                                                                );
+                                                              });
+                                                            })()}
+                                                          </TableBody>
+                                                        </Table>
                                                       </div>
                                                     );
                                                   })()}
@@ -1060,7 +1464,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                               </button>
                                               
                                               {isFinalExpanded && (
-                                                <div className="p-2 bg-white">
+                                                <div className="p-4 bg-white">
                                                   {(() => {
                                                     // Determine semester based on key (1st or 2nd)
                                                     const semester = semesterKey.includes('-1st') ? '1st' : '2nd';
@@ -1081,23 +1485,157 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                     }
                                                     
                                                     return (
-                                                      <div className="space-y-1">
-                                                        {copies.map((copy) => (
-                                                          <div key={copy.id} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded border border-gray-100">
-                                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                              <FileText className="h-3 w-3 text-green-500 flex-shrink-0" />
-                                                              <span className="text-xs text-gray-700 truncate">{copy.file_name}</span>
-                                                            </div>
-                                                            <a
-                                                              href={copy.file_url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="text-blue-600 hover:text-blue-800 flex-shrink-0 ml-2"
-                                                            >
-                                                              <ExternalLink className="h-3 w-3" />
-                                                            </a>
-                                                          </div>
-                                                        ))}
+                                                      <div className="space-y-3">
+                                                        {(() => {
+                                                          // Get the submission that was reviewed (prefer accomplishment if both exist)
+                                                          const reviewedSubmission = copies.length > 0 
+                                                            ? submissions.find(s => s.id === copies[0].submission_id && s.submission_type === "Accomplishment Report") ||
+                                                              submissions.find(s => s.id === copies[0].submission_id)
+                                                            : null;
+                                                            
+                                                          if (reviewedSubmission) {
+                                                            const isEndorsed = reviewedSubmission.endorsed_to_osld;
+                                                            
+                                                            return (
+                                                              <div className="border-b pb-3 space-y-2">
+                                                                <div className="flex items-start justify-between">
+                                                                  <div className="flex-1">
+                                                                    {reviewedSubmission.coa_reviewed_at && (
+                                                                      <div className="text-xs text-gray-600 mb-2">
+                                                                        <span className="font-semibold">Reviewed on:</span> {new Date(reviewedSubmission.coa_reviewed_at).toLocaleDateString('en-US', {
+                                                                          month: 'short',
+                                                                          day: 'numeric',
+                                                                          year: 'numeric'
+                                                                        })}
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_opinion && (
+                                                                      <div className="mb-2">
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Opinion: </span>
+                                                                        <span className="text-sm text-gray-900">
+                                                                          {reviewedSubmission.coa_opinion}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                    {reviewedSubmission.coa_comment && (
+                                                                      <div>
+                                                                        <span className="text-xs font-semibold text-gray-900">COA Comment: </span>
+                                                                        <span className="text-sm text-gray-700">
+                                                                          {reviewedSubmission.coa_comment}
+                                                                        </span>
+                                                                      </div>
+                                                                    )}
+                                                                  </div>
+                                                                  <Button
+                                                                    size="sm"
+                                                                    className={`ml-4 ${isEndorsed ? 'bg-gray-400 hover:bg-gray-400 cursor-not-allowed' : 'bg-[#0F4229] hover:bg-[#0d3821]'}`}
+                                                                    disabled={isEndorsed}
+                                                                    onClick={async () => {
+                                                                      try {
+                                                                        const { error } = await supabase
+                                                                          .from('submissions')
+                                                                          .update({ endorsed_to_osld: true })
+                                                                          .eq('id', reviewedSubmission.id);
+                                                                        
+                                                                        if (error) throw error;
+                                                                        
+                                                                        toast({
+                                                                          title: "Success",
+                                                                          description: "Successfully endorsed to OSLD",
+                                                                        });
+                                                                        
+                                                                        // Refresh data
+                                                                        loadSubmissions();
+                                                                      } catch (error) {
+                                                                        console.error('Error endorsing to OSLD:', error);
+                                                                        toast({
+                                                                          title: "Error",
+                                                                          description: "Failed to endorse to OSLD",
+                                                                          variant: "destructive",
+                                                                        });
+                                                                      }
+                                                                    }}
+                                                                  >
+                                                                    <Send className="h-3 w-3 mr-1" />
+                                                                    {isEndorsed ? 'Endorsed' : 'Endorse to OSLD'}
+                                                                  </Button>
+                                                                </div>
+                                                              </div>
+                                                            );
+                                                          }
+                                                          return null;
+                                                        })()}
+                                                        
+                                                        <Table>
+                                                          <TableHeader>
+                                                            <TableRow className="bg-gray-50 hover:bg-gray-50">
+                                                              <TableHead className="text-gray-700 font-semibold">Document</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Accomplishment</TableHead>
+                                                              <TableHead className="text-gray-700 font-semibold">Liquidation</TableHead>
+                                                            </TableRow>
+                                                          </TableHeader>
+                                                          <TableBody>
+                                                            {(() => {
+                                                              const groupedByActivity: Record<string, { accomplishment?: typeof copies[0]; liquidation?: typeof copies[0] }> = {};
+                                                              copies.forEach((copy) => {
+                                                                const originalSubmission = submissions.find(s => s.id === copy.submission_id);
+                                                                if (originalSubmission) {
+                                                                  const title = originalSubmission.activity_title;
+                                                                  if (!groupedByActivity[title]) {
+                                                                    groupedByActivity[title] = {};
+                                                                  }
+                                                                  if (originalSubmission.submission_type === "Accomplishment Report") {
+                                                                    groupedByActivity[title].accomplishment = copy;
+                                                                  } else if (originalSubmission.submission_type === "Liquidation Report") {
+                                                                    groupedByActivity[title].liquidation = copy;
+                                                                  }
+                                                                }
+                                                              });
+                                                              
+                                                              return Object.entries(groupedByActivity).map(([title, docs]) => {
+                                                                return (
+                                                                  <TableRow key={title} className="hover:bg-gray-50">
+                                                                    <TableCell className="font-medium">
+                                                                      <div className="flex items-center gap-2">
+                                                                        {title}
+                                                                      </div>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.accomplishment ? (
+                                                                        <a
+                                                                          href={docs.accomplishment.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                      {docs.liquidation ? (
+                                                                        <a
+                                                                          href={docs.liquidation.file_url}
+                                                                          target="_blank"
+                                                                          rel="noopener noreferrer"
+                                                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 text-sm"
+                                                                        >
+                                                                          <Eye className="h-4 w-4" />
+                                                                          View
+                                                                        </a>
+                                                                      ) : (
+                                                                        <span className="text-gray-400 text-sm">Not submitted</span>
+                                                                      )}
+                                                                    </TableCell>
+                                                                  </TableRow>
+                                                                );
+                                                              });
+                                                            })()}
+                                                          </TableBody>
+                                                        </Table>
                                                       </div>
                                                     );
                                                   })()}
@@ -1304,6 +1842,17 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                         // Get audit type assignment for this organization
                         const auditTypeInfo = await getNextAuditType(org);
                         
+                        // Copy files to audit folders based on audit type
+                        const submissionDate = new Date(orgSubmissions[0].submitted_at);
+                        const year = submissionDate.getFullYear();
+                        const semester = auditTypeInfo.semester;
+                        const auditType = auditTypeInfo.audit_type.toLowerCase() as 'initial' | 'final';
+                        
+                        // Copy files to coa_review_copies table
+                        for (const sub of orgSubmissions) {
+                          await copyToAuditFolder(sub, auditType, semester);
+                        }
+                        
                         // Update all submissions for this organization
                         const reviewedAt = new Date().toISOString();
                         for (const sub of orgSubmissions) {
@@ -1319,7 +1868,8 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                               coa_reviewed: true,
                               coa_reviewed_at: reviewedAt,
                               revision_count: currentRevisionCount,
-                              audit_type: auditTypeInfo.display_text
+                              audit_type: auditTypeInfo.display_text,
+                              semester: auditTypeInfo.semester
                             })
                             .eq('id', sub.id);
 

@@ -1,18 +1,15 @@
 import { supabase } from './supabase';
 
 /**
- * Determines the audit type (semester and initial/final) based on the current date.
+ * Determines the audit type (semester and initial/final) based on submission count in the year.
  * 
- * Schedule:
- * - 1st Semester: October (Initial), December (Final)
- * - 2nd Semester: March (Initial), May (Final)
+ * Schedule (based on COA audit sequence per organization per year):
+ * - 1st audit submission → 1st Semester Initial
+ * - 2nd audit submission → 1st Semester Final
+ * - 3rd audit submission → 2nd Semester Initial
+ * - 4th audit submission → 2nd Semester Final
  * 
- * Date-based logic:
- * - January-February → 2nd Semester Initial (because we're before March)
- * - March-April → 2nd Semester Initial
- * - May-September → 2nd Semester Final
- * - October-November → 1st Semester Initial
- * - December → 1st Semester Final
+ * Each organization has exactly 4 audits per year, sequenced by when COA reviews them.
  * 
  * @param organization - The organization short name (e.g., 'USED', 'USG')
  * @returns Object containing semester, audit_type, and submission_count
@@ -24,13 +21,12 @@ export async function getNextAuditType(organization: string): Promise<{
   display_text: string;
 }> {
   const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1; // 1-12
   
-  // Count how many audits have been submitted for this org this year
-  // We count submissions where COA has added opinion AND comment (coa_reviewed = true)
+  // Count how many DISTINCT audits have been completed for this org this year
+  // Each unique combination of (semester, audit_type) = 1 audit
   const { data, error } = await supabase
     .from('submissions')
-    .select('id, audit_type')
+    .select('semester, audit_type')
     .eq('organization', organization)
     .eq('coa_reviewed', true)
     .gte('coa_reviewed_at', `${currentYear}-01-01`)
@@ -41,33 +37,74 @@ export async function getNextAuditType(organization: string): Promise<{
     throw error;
   }
 
-  const submission_count = data?.length || 0;
+  // Get unique audits by semester + audit_type combination
+  // e.g., "1st-Initial", "1st-Final", "2nd-Initial" are 3 different audits
+  const uniqueAudits = new Set(data?.map(d => {
+    if (d.semester && d.audit_type) {
+      return `${d.semester}-${d.audit_type}`;
+    }
+    // Fallback: use the full audit_type display text if semester is missing
+    return d.audit_type || '';
+  }) || []);
+  const submission_count = uniqueAudits.size + 1; // +1 because this is the NEXT audit
   
-  // Determine audit type based on current date
+  // Determine audit type based on submission count (1st, 2nd, 3rd, or 4th audit of the year)
   let semester: '1st' | '2nd';
   let audit_type: 'Initial' | 'Final';
   let display_text: string;
   
-  if (currentMonth >= 1 && currentMonth <= 4) {
-    // January to April → 2nd Semester Initial (March deadline)
-    semester = '2nd';
-    audit_type = 'Initial';
-    display_text = '2nd Semester Initial Audit';
-  } else if (currentMonth >= 5 && currentMonth <= 9) {
-    // May to September → 2nd Semester Final (May deadline)
-    semester = '2nd';
-    audit_type = 'Final';
-    display_text = '2nd Semester Final Audit';
-  } else if (currentMonth >= 10 && currentMonth <= 11) {
-    // October to November → 1st Semester Initial (October deadline)
-    semester = '1st';
-    audit_type = 'Initial';
-    display_text = '1st Semester Initial Audit';
-  } else {
-    // December → 1st Semester Final (December deadline)
-    semester = '1st';
-    audit_type = 'Final';
-    display_text = '1st Semester Final Audit';
+  switch (submission_count) {
+    case 1:
+      // 1st audit of the year
+      semester = '1st';
+      audit_type = 'Initial';
+      display_text = '1st Semester Initial Audit';
+      break;
+    case 2:
+      // 2nd audit of the year
+      semester = '1st';
+      audit_type = 'Final';
+      display_text = '1st Semester Final Audit';
+      break;
+    case 3:
+      // 3rd audit of the year
+      semester = '2nd';
+      audit_type = 'Initial';
+      display_text = '2nd Semester Initial Audit';
+      break;
+    case 4:
+      // 4th audit of the year
+      semester = '2nd';
+      audit_type = 'Final';
+      display_text = '2nd Semester Final Audit';
+      break;
+    default:
+      // If more than 4, cycle back to determine which audit type
+      const cycled = ((submission_count - 1) % 4) + 1;
+      switch (cycled) {
+        case 1:
+          semester = '1st';
+          audit_type = 'Initial';
+          display_text = '1st Semester Initial Audit';
+          break;
+        case 2:
+          semester = '1st';
+          audit_type = 'Final';
+          display_text = '1st Semester Final Audit';
+          break;
+        case 3:
+          semester = '2nd';
+          audit_type = 'Initial';
+          display_text = '2nd Semester Initial Audit';
+          break;
+        case 4:
+        default:
+          semester = '2nd';
+          audit_type = 'Final';
+          display_text = '2nd Semester Final Audit';
+          break;
+      }
+      break;
   }
   
   return {

@@ -563,6 +563,7 @@ export type Database = {
           reviewed_by: string | null
           revision_count: number | null
           revision_reason: string | null
+          semester: string | null
           status: string | null
           submission_type: string
           submitted_at: string | null
@@ -596,6 +597,7 @@ export type Database = {
           reviewed_by?: string | null
           revision_count?: number | null
           revision_reason?: string | null
+          semester?: string | null
           status?: string | null
           submission_type: string
           submitted_at?: string | null
@@ -629,6 +631,7 @@ export type Database = {
           reviewed_by?: string | null
           revision_count?: number | null
           revision_reason?: string | null
+          semester?: string | null
           status?: string | null
           submission_type?: string
           submitted_at?: string | null

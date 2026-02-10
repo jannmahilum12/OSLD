@@ -14,8 +14,8 @@ interface Submission {
 export const getSemesterFromDate = (date: Date): '1st' | '2nd' => {
   const month = date.getMonth() + 1;
   // 1st Semester: October (10) - December (12) audits
-  // 2nd Semester: March (3) - May (5) audits
-  if (month >= 10 || month <= 12) {
+  // 2nd Semester: January (1) - September (9) audits (March/May are the main ones)
+  if (month >= 10 && month <= 12) {
     return '1st';
   } else {
     return '2nd';
@@ -36,18 +36,23 @@ export const getAuditTypeFromDate = (date: Date, semester: '1st' | '2nd'): 'init
 };
 
 // Copy submission to COA review folder structure
+// semester is passed from the caller based on audit counting (not date)
 export const copyToAuditFolder = async (
   submission: Submission,
-  auditType: 'initial' | 'final'
+  auditType: 'initial' | 'final',
+  semester?: '1st' | '2nd'
 ): Promise<void> => {
   const submissionDate = new Date(submission.submitted_at);
   const year = submissionDate.getFullYear();
-  const semester = getSemesterFromDate(submissionDate);
+  // Use passed semester if provided, otherwise fallback to date-based (legacy)
+  const finalSemester = semester || getSemesterFromDate(submissionDate);
   
   // Build storage path: {year}/{organization}/semester_{semester}/audit_{auditType}/{filename}
-  const storagePath = `${year}/${submission.organization}/semester_${semester}/audit_${auditType}/${submission.file_name}`;
+  const storagePath = `${year}/${submission.organization}/semester_${finalSemester}/audit_${auditType}/${submission.file_name}`;
   
-  // Copy file in storage bucket
+  let finalFileUrl = submission.file_url;
+  
+  // Copy file in storage bucket (optional - if fails, use original URL)
   try {
     // Extract the actual file path from the file_url
     // URL format: https://{project}.supabase.co/storage/v1/object/public/submissions/{path}
@@ -59,41 +64,55 @@ export const copyToAuditFolder = async (
       .from('submissions')
       .download(originalPath);
     
-    if (downloadError) throw downloadError;
-    
-    // Upload to new path
-    const { error: uploadError } = await supabase.storage
-      .from('submissions')
-      .upload(storagePath, fileData, {
-        contentType: fileData.type,
-        upsert: false
-      });
-    
-    if (uploadError) throw uploadError;
-    
-    // Get public URL for the copied file
-    const { data: { publicUrl } } = supabase.storage
-      .from('submissions')
-      .getPublicUrl(storagePath);
-    
-    // Save reference in coa_review_copies table
-    await supabase
+    if (downloadError) {
+      console.warn('Could not download file for copying, using original URL:', downloadError.message);
+    } else {
+      // Upload to new path
+      const { error: uploadError } = await supabase.storage
+        .from('submissions')
+        .upload(storagePath, fileData, {
+          contentType: fileData.type,
+          upsert: true
+        });
+      
+      if (uploadError) {
+        console.warn('Could not upload file copy, using original URL:', uploadError.message);
+      } else {
+        // Get public URL for the copied file
+        const { data: { publicUrl } } = supabase.storage
+          .from('submissions')
+          .getPublicUrl(storagePath);
+        
+        finalFileUrl = publicUrl;
+      }
+    }
+  } catch (error: any) {
+    console.warn('File copy failed, using original URL:', error.message);
+  }
+  
+  // Save reference in coa_review_copies table (this is the important part)
+  try {
+    const { error: insertError } = await supabase
       .from('coa_review_copies')
       .insert({
         submission_id: submission.id,
         organization: submission.organization,
         year,
-        semester,
+        semester: finalSemester,
         audit_type: auditType,
         file_name: submission.file_name,
-        file_url: publicUrl,
+        file_url: finalFileUrl,
         storage_path: storagePath,
         original_submission_date: submission.submitted_at
       });
     
-  } catch (error) {
-    console.error('Error copying to audit folder:', error);
-    throw error;
+    if (insertError) {
+      console.error('Insert error:', insertError);
+      throw new Error(`Failed to save audit record: ${insertError.message}`);
+    }
+  } catch (error: any) {
+    console.error('Error saving to coa_review_copies:', error);
+    throw new Error(error.message || 'Failed to save file to audit folder');
   }
 };
 
@@ -118,7 +137,7 @@ export const copyPendingToInitialAudit = async (
   
   // Copy each pending submission to initial audit folder (keep in Pending)
   for (const submission of pendingSubmissions) {
-    await copyToAuditFolder(submission, 'initial');
+    await copyToAuditFolder(submission, 'initial', semester);
     
     // Update submission to mark it with initial audit type (keep status as Pending)
     const { error: updateError } = await supabase
@@ -179,7 +198,7 @@ export const movePendingToFinalAudit = async (
   
   // Copy each pending submission to final audit folder and mark as 'final'
   for (const submission of pendingSubmissions) {
-    await copyToAuditFolder(submission, 'final');
+    await copyToAuditFolder(submission, 'final', semester);
     
     // Update submission to mark it with final audit type and change status
     const { error: updateError } = await supabase
