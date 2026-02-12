@@ -72,8 +72,6 @@ import CreateAccountPage from "./CreateAccountPage";
 import OrganizationsPage from "./OrganizationsPage";
 import { supabase } from "../lib/supabase";
 import { useToast } from "./ui/use-toast";
-import { COAAuditScheduleDisplay } from "./COAAuditScheduleDisplay";
-import { AuditDeadlineSummary } from "./AuditDeadlineSummary";
 import { DeleteConfirmationDialog } from "./DeleteConfirmationDialog";
 
 // Deadline Notification Component for OSLD
@@ -475,13 +473,12 @@ export default function OSLDDashboard() {
     const { data } = await supabase
       .from('submissions')
       .select('*')
+      .neq('status', 'Deleted (Previously Approved)')
       .order('submitted_at', { ascending: false });
     
     if (data) {
       setActivityLogs(
-        data
-          .filter((s) => s.status !== "Deleted (Previously Approved)") // Filter out deleted submissions
-          .map((s) => ({
+        data.map((s) => ({
             id: s.id,
         documentName: s.activity_title,
         type: s.submission_type,
@@ -590,6 +587,7 @@ export default function OSLDDashboard() {
     const { data } = await supabase
       .from('submissions')
       .select('*')
+      .neq('status', 'Deleted (Previously Approved)')
       .order('submitted_at', { ascending: false });
     
     if (data) {
@@ -625,7 +623,8 @@ export default function OSLDDashboard() {
       // Fetch all submissions (regardless of where they were submitted)
       const { data: allSubmissions } = await supabase
         .from('submissions')
-        .select('submission_type, status, organization, endorsed_to_coa, endorsed_to_osld');
+        .select('submission_type, status, organization, endorsed_to_coa, endorsed_to_osld')
+        .neq('status', 'Deleted (Previously Approved)');
 
       // Fetch all events
       const { data: allEvents } = await supabase
@@ -1358,7 +1357,7 @@ export default function OSLDDashboard() {
           all_day: eventAllDay,
           venue: eventVenue,
           target_organization: eventTargetOrg,
-          recurrence_type: eventRecurrence || null,
+          recurrence_rule: eventRecurrence || null,
           recurrence_day: eventRecurrenceDay || null,
           require_accomplishment: eventRequireAccomplishment,
           require_liquidation: eventRequireLiquidation
@@ -1388,8 +1387,9 @@ export default function OSLDDashboard() {
       setEvents([...filteredEvents, updatedEvent]);
     } else {
       // Create new event
-      const newEvent = {
-        id: Date.now().toString(),
+      const newEventId = Date.now().toString();
+      const newEventData = {
+        id: newEventId,
         title: eventTitle,
         description: eventDescription,
         start_date: eventStartDate,
@@ -1399,15 +1399,25 @@ export default function OSLDDashboard() {
         all_day: eventAllDay,
         venue: eventVenue,
         target_organization: eventTargetOrg,
-        recurrence_type: eventRecurrence || null,
+        recurrence_rule: eventRecurrence || null,
         recurrence_day: eventRecurrenceDay || null,
         require_accomplishment: eventRequireAccomplishment,
         require_liquidation: eventRequireLiquidation,
       };
 
-      await supabase
+      const { data: insertedEvent, error: insertError } = await supabase
         .from('osld_events')
-        .insert(newEvent);
+        .insert(newEventData)
+        .select()
+        .single();
+      
+      if (insertError) {
+        console.error("Error creating event:", insertError);
+        setFormError("Failed to create event. Please try again.");
+        return;
+      }
+      
+      const newEvent = { ...newEventData, id: insertedEvent.id };
 
       // Create notification for new event (notify all orgs except OSLD)
       const allOrgs = ['AO', 'LSG', 'GSC', 'LCO', 'USG', 'TGP', 'COA'];
@@ -7181,12 +7191,6 @@ ${deadlineInfo}`;
                   </div>
                 </Card>
               </div>
-
-              {/* COA Audit Schedule Section */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <AuditDeadlineSummary />
-                <COAAuditScheduleDisplay />
-              </div>
             </div>
 
             {/* Calendar Section - Right side (1/3 width) */}
@@ -7419,8 +7423,8 @@ ${deadlineInfo}`;
                     <div className="max-h-[400px] overflow-y-auto space-y-2">
                       {(() => {
                         const filteredEvents = events.filter((event) => {
-                          // Filter by organization
-                          if (calendarFilterOrg !== "ALL" && event.targetOrganization !== calendarFilterOrg) {
+                          // Filter by organization - "ALL" means show all events, not filter by targetOrganization === "ALL"
+                          if (calendarFilterOrg !== "ALL" && event.targetOrganization !== calendarFilterOrg && event.targetOrganization !== "ALL") {
                             return false;
                           }
                           // Filter by event type

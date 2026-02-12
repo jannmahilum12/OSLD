@@ -168,7 +168,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
     try {
       const orgsToFetch = getOrgsForPage();
       // Get ALL submissions sent to COA from the target organization(s)
-      // Show APPROVED submissions in Audit Files (these are files COA already approved from Submissions sidebar)
+      // Show APPROVED submissions in Audit Files (only Accomplishment and Liquidation Reports, exclude appeals)
       // After COA approves a submission, it moves here for adding COA opinion/comment
       const { data, error } = await supabase
         .from('submissions')
@@ -176,8 +176,9 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
         .eq('submitted_to', 'COA')
         .in('organization', orgsToFetch)
         .in('status', ['Approved', 'Pending'])  // Load approved AND pending submissions (pending = initial audits in progress)
-        .in('submission_type', ['Accomplishment Report', 'Liquidation Report', 'Letter of Appeal'])
+        .in('submission_type', ['Accomplishment Report', 'Liquidation Report'])
         .neq('status', 'In Final Audit')  // Exclude final audits that have been moved
+        .neq('status', 'Deleted (Previously Approved)')  // Exclude soft-deleted submissions
         .order('submitted_at', { ascending: false });
 
       if (error) throw error;
@@ -442,11 +443,13 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                   )}
                 </TableCell>
                 <TableCell className="text-gray-600">
-                  {new Date((docs.accomplishment || docs.liquidation)!.submitted_at).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric'
-                  })}
+                  {(docs.accomplishment || docs.liquidation)?.submitted_at 
+                    ? new Date((docs.accomplishment || docs.liquidation)!.submitted_at).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric'
+                      })
+                    : 'N/A'}
                 </TableCell>
                 <TableCell>
                   <div className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-gray-700 text-sm">
@@ -540,6 +543,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                       await supabase
                         .from('notifications')
                         .insert({
+                          event_id: orgSubmissions[0].id,
                           event_title: `COA Endorsed Files from ${organization}`,
                           event_description: `COA has endorsed files for "${activityTitle}" from ${organization}. Check Activity Logs.`,
                           created_by: 'COA',
@@ -858,13 +862,24 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                                         
                                                                         if (error) throw error;
                                                                         
+                                                                        // Send notification to OSLD
+                                                                        await supabase
+                                                                          .from('notifications')
+                                                                          .insert({
+                                                                            event_id: reviewedSubmission.id,
+                                                                            event_title: `COA Endorsed Files from ${reviewedSubmission.organization}`,
+                                                                            event_description: `COA has endorsed files for "${reviewedSubmission.activity_title}" from ${reviewedSubmission.organization}. Check Activity Logs.`,
+                                                                            created_by: 'COA',
+                                                                            target_org: 'OSLD'
+                                                                          });
+                                                                        
                                                                         toast({
                                                                           title: "Success",
                                                                           description: "Successfully endorsed to OSLD",
                                                                         });
                                                                         
                                                                         // Refresh data
-                                                                        fetchSubmissions();
+                                                                        loadSubmissions();
                                                                       } catch (error) {
                                                                         console.error('Error endorsing to OSLD:', error);
                                                                         toast({
@@ -1071,6 +1086,17 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                                           .eq('id', reviewedSubmission.id);
                                                                         
                                                                         if (error) throw error;
+                                                                        
+                                                                        // Send notification to OSLD
+                                                                        await supabase
+                                                                          .from('notifications')
+                                                                          .insert({
+                                                                            event_id: reviewedSubmission.id,
+                                                                            event_title: `COA Endorsed Files from ${reviewedSubmission.organization}`,
+                                                                            event_description: `COA has endorsed files for "${reviewedSubmission.activity_title}" from ${reviewedSubmission.organization}. Check Activity Logs.`,
+                                                                            created_by: 'COA',
+                                                                            target_org: 'OSLD'
+                                                                          });
                                                                         
                                                                         toast({
                                                                           title: "Success",
@@ -1325,13 +1351,24 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                                         
                                                                         if (error) throw error;
                                                                         
+                                                                        // Send notification to OSLD
+                                                                        await supabase
+                                                                          .from('notifications')
+                                                                          .insert({
+                                                                            event_id: reviewedSubmission.id,
+                                                                            event_title: `COA Endorsed Files from ${reviewedSubmission.organization}`,
+                                                                            event_description: `COA has endorsed files for "${reviewedSubmission.activity_title}" from ${reviewedSubmission.organization}. Check Activity Logs.`,
+                                                                            created_by: 'COA',
+                                                                            target_org: 'OSLD'
+                                                                          });
+                                                                        
                                                                         toast({
                                                                           title: "Success",
                                                                           description: "Successfully endorsed to OSLD",
                                                                         });
                                                                         
                                                                         // Refresh data
-                                                                        fetchSubmissions();
+                                                                        loadSubmissions();
                                                                       } catch (error) {
                                                                         console.error('Error endorsing to OSLD:', error);
                                                                         toast({
@@ -1539,6 +1576,17 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
                                                                         
                                                                         if (error) throw error;
                                                                         
+                                                                        // Send notification to OSLD
+                                                                        await supabase
+                                                                          .from('notifications')
+                                                                          .insert({
+                                                                            event_id: reviewedSubmission.id,
+                                                                            event_title: `COA Endorsed Files from ${reviewedSubmission.organization}`,
+                                                                            event_description: `COA has endorsed files for "${reviewedSubmission.activity_title}" from ${reviewedSubmission.organization}. Check Activity Logs.`,
+                                                                            created_by: 'COA',
+                                                                            target_org: 'OSLD'
+                                                                          });
+                                                                        
                                                                         toast({
                                                                           title: "Success",
                                                                           description: "Successfully endorsed to OSLD",
@@ -1674,7 +1722,7 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
 
     // Helper function to group by activity_title within an organization
     const groupByActivityTitle = (submissions: Submission[]) => {
-      const grouped: Record<string, { accomplishment?: Submission; liquidation?: Submission }> = {};
+      const grouped: Record<string, { accomplishment?: Submission; liquidation?: Submission; appeal?: Submission }> = {};
       submissions.forEach((sub) => {
         const title = sub.activity_title;
         if (!grouped[title]) {
@@ -1684,6 +1732,8 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
           grouped[title].accomplishment = sub;
         } else if (sub.submission_type === "Liquidation Report") {
           grouped[title].liquidation = sub;
+        } else if (sub.submission_type === "Letter of Appeal") {
+          grouped[title].appeal = sub;
         }
       });
       return grouped;
@@ -1733,51 +1783,112 @@ export function COASubmissionsPage({ targetOrg, targetOrgFullName }: COASubmissi
               </TableHeader>
               <TableBody>
                 {Object.entries(groupedByTitle).map(([title, docs]) => (
-                  <TableRow key={title} className="hover:bg-gray-50">
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-gray-500" />
-                        {title}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {docs.accomplishment?.file_url ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
-                          onClick={() => window.open(docs.accomplishment!.file_url, '_blank')}
-                        >
-                          <Eye className="h-4 w-4" />
-                          View
-                        </Button>
-                      ) : (
-                        <span className="text-gray-400 text-sm">Not submitted</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {docs.liquidation?.file_url ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
-                          onClick={() => window.open(docs.liquidation!.file_url, '_blank')}
-                        >
-                          <Eye className="h-4 w-4" />
-                          View
-                        </Button>
-                      ) : (
-                        <span className="text-gray-400 text-sm">Not submitted</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-gray-600">
-                      {new Date((docs.accomplishment || docs.liquidation)!.submitted_at).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric'
-                      })}
-                    </TableCell>
-                  </TableRow>
+                  // Using Fragment shorthand to avoid Tempo data-tempoelementid warning
+                  <React.Fragment key={`fragment-${title}`}>
+                    {/* Show Appeal Submitted Card if there's an appeal for this activity submitted TO COA */}
+                    {docs.appeal && docs.appeal.status === 'Pending' && docs.appeal.submitted_to === 'COA' && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="p-0">
+                          <div className="bg-gradient-to-r from-red-50 to-red-50 border-l-4 border-red-400 m-2">
+                            <div className="flex gap-0">
+                              <div className="w-1 bg-gray-400" />
+                              
+                              <div className="flex-1 p-4">
+                                {/* Header */}
+                                <div className="flex items-center gap-3 mb-4">
+                                  <div className="w-10 h-10 rounded-lg bg-red-50 border border-red-200 flex items-center justify-center">
+                                    <FileText className="w-5 h-5 text-gray-700" />
+                                  </div>
+                                  <div className="flex-1">
+                                    <h4 className="text-sm font-bold uppercase tracking-wide text-gray-900">
+                                      Appeal Submitted
+                                    </h4>
+                                    <p className="text-xs text-gray-500">Pending Your Review</p>
+                                  </div>
+                                </div>
+                                
+                                {/* Submitted By Badge */}
+                                <div className="mb-3">
+                                  <div className="inline-flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded border border-gray-200">
+                                    <span className="text-xs font-semibold text-gray-600 uppercase">Submitted By:</span>
+                                    <span className="text-xs font-bold text-gray-700">{org}</span>
+                                  </div>
+                                </div>
+                                
+                                {/* Appeal Message */}
+                                <div className="bg-white border border-gray-200 rounded p-3 mb-4">
+                                  <p className="text-xs text-gray-900">
+                                    A Letter of Appeal has been submitted and requires your review.
+                                  </p>
+                                </div>
+                                
+                                {/* Review Appeal Button */}
+                                <Button
+                                  className="w-full bg-[#0F4229] hover:bg-[#0d3821] text-white"
+                                  onClick={() => {
+                                    if (docs.appeal?.file_url) {
+                                      window.open(docs.appeal.file_url, '_blank');
+                                    }
+                                  }}
+                                >
+                                  <FileText className="h-4 w-4 mr-2" />
+                                  Review Appeal
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    
+                    <TableRow className="hover:bg-gray-50">
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4 text-gray-500" />
+                          {title}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {docs.accomplishment?.file_url ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                            onClick={() => window.open(docs.accomplishment!.file_url, '_blank')}
+                          >
+                            <Eye className="h-4 w-4" />
+                            View
+                          </Button>
+                        ) : (
+                          <span className="text-gray-400 text-sm">Not submitted</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {docs.liquidation?.file_url ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                            onClick={() => window.open(docs.liquidation!.file_url, '_blank')}
+                          >
+                            <Eye className="h-4 w-4" />
+                            View
+                          </Button>
+                        ) : (
+                          <span className="text-gray-400 text-sm">Not submitted</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-gray-600">
+                        {(docs.accomplishment || docs.liquidation)?.submitted_at 
+                          ? new Date((docs.accomplishment || docs.liquidation)!.submitted_at).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric'
+                            })
+                          : 'N/A'}
+                      </TableCell>
+                    </TableRow>
+                  </React.Fragment>
                 ))}
               </TableBody>
             </Table>

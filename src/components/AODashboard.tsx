@@ -715,7 +715,8 @@ function AODashboard({
             // COA sees all deadlines
             shouldShowDeadline = true;
           } else {
-            shouldShowDeadline = e.target_organization === orgShortName;
+            // Show deadline if target_organization matches current org OR is set to 'ALL'
+            shouldShowDeadline = e.target_organization === orgShortName || e.target_organization === 'ALL';
           }
 
           if (shouldShowDeadline && e.end_date) {
@@ -3829,6 +3830,85 @@ function AODashboard({
             Clear
           </Button>
         )}
+        <div className="ml-auto flex items-center">
+          {myLogs.length > 0 && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="text-xs"
+                >
+                  <Trash2 className="h-3 w-3 mr-2" />
+                  Delete All
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Do you want to delete all of your activity logs? This action cannot be undone and will permanently remove all your submitted files.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={async () => {
+                      try {
+                        // Step 1: Soft-delete approved Accomplishment/Liquidation submissions
+                        // to prevent deadlines from reappearing in the calendar
+                        await supabase
+                          .from("submissions")
+                          .update({
+                            status: "Deleted (Previously Approved)",
+                            file_url: null,
+                            file_name: null,
+                            gdrive_link: null
+                          })
+                          .eq("organization", orgShortName)
+                          .eq("status", "Approved")
+                          .in("submission_type", ["Accomplishment Report", "Liquidation Report"]);
+
+                        // Step 2: Hard-delete all remaining non-soft-deleted submissions
+                        const { error } = await supabase
+                          .from("submissions")
+                          .delete()
+                          .eq("organization", orgShortName)
+                          .neq("status", "Deleted (Previously Approved)");
+
+                        if (error) throw error;
+
+                        // Real-time update: Filter out all logs for this organization
+                        setActivityLogs((prevLogs) =>
+                          prevLogs.filter(
+                            (log) => log.organization !== orgShortName,
+                          ),
+                        );
+
+                        toast({
+                          title: "Success",
+                          description: "All your activity logs have been deleted.",
+                        });
+                      } catch (err: unknown) {
+                        const message =
+                          err instanceof Error ? err.message : "Unknown error";
+                        console.error("Error deleting logs:", message);
+                        toast({
+                          title: "Error",
+                          description: message,
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    Delete All
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
       </div>
     );
 
@@ -4355,83 +4435,6 @@ function AODashboard({
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                     <div className="px-6 py-4 bg-[#003b27] flex justify-between items-center">
                       <h3 className="text-lg font-semibold text-white">My Activity Logs</h3>
-                      {myLogs.length > 0 && (
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              className="text-xs"
-                            >
-                              <Trash2 className="h-3 w-3 mr-2" />
-                              Delete All
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Do you want to delete all of your activity logs? This action cannot be undone and will permanently remove all your submitted files.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={async () => {
-                                  try {
-                                    // Step 1: Soft-delete approved Accomplishment/Liquidation submissions
-                                    // to prevent deadlines from reappearing in the calendar
-                                    await supabase
-                                      .from("submissions")
-                                      .update({
-                                        status: 'Deleted (Previously Approved)',
-                                        file_url: null,
-                                        file_name: null,
-                                        gdrive_link: null
-                                      })
-                                      .eq("organization", orgShortName)
-                                      .eq("status", "Approved")
-                                      .in("submission_type", ["Accomplishment Report", "Liquidation Report"]);
-
-                                    // Step 2: Hard-delete all remaining non-soft-deleted submissions
-                                    const { error } = await supabase
-                                      .from("submissions")
-                                      .delete()
-                                      .eq("organization", orgShortName)
-                                      .neq("status", "Deleted (Previously Approved)");
-
-                                    if (error) throw error;
-
-                                    // Real-time update: Filter out all logs for this organization
-                                    setActivityLogs((prevLogs) =>
-                                      prevLogs.filter(
-                                        (log) => log.organization !== orgShortName,
-                                      ),
-                                    );
-
-                                    toast({
-                                      title: "Success",
-                                      description: "All your activity logs have been deleted.",
-                                    });
-                                  } catch (err: unknown) {
-                                    const message =
-                                      err instanceof Error ? err.message : "Unknown error";
-                                    console.error("Error deleting logs:", message);
-                                    toast({
-                                      title: "Error",
-                                      description: message,
-                                      variant: "destructive",
-                                    });
-                                  }
-                                }}
-                                className="bg-red-600 hover:bg-red-700"
-                              >
-                                Delete All
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      )}
                     </div>
                     {FilterControls}
                     <LogsTable logs={myLogs} />
@@ -6669,7 +6672,7 @@ function AODashboard({
               className="text-2xl lg:text-4xl font-bold"
               style={{ color: "#003b27" }}
             >
-              {orgShortName} Dashboard
+              CALENDAR
             </h2>
             <div className="flex items-center gap-3">
               <Popover

@@ -124,21 +124,25 @@ export default function SubmissionsPage({
     // - COA receives Accomplishment, Liquidation, and Letter of Appeal from USG, LCO, GSC, USED, TGP
     // - OSLD receives Request to Conduct Activity from all orgs
     if (orgShortName === 'LCO') {
-      // LCO sees submissions sent TO them (from AO) + their OWN submissions (sent to COA/OSLD)
+      // LCO sees only submissions sent TO them (from AOs)
+      // LCO should not create their own submissions, only receive from others
       const { data, error } = await supabase
         .from('submissions')
         .select('*')
-        .or(`submitted_to.eq.LCO,organization.eq.LCO`)
+        .eq('submitted_to', 'LCO')
+        .neq('status', 'Deleted (Previously Approved)')
         .order('submitted_at', { ascending: false });
       if (error) { console.error('Error loading submissions:', error); return; }
       setSubmissions(data || []);
       return;
     } else if (orgShortName === 'USG') {
-      // USG sees submissions sent TO them (from LSG) + their OWN submissions (sent to COA/OSLD)
+      // USG sees only submissions sent TO them (from LSG)
+      // USG should not create their own submissions, only receive from others
       const { data, error } = await supabase
         .from('submissions')
         .select('*')
-        .or(`submitted_to.eq.USG,organization.eq.USG`)
+        .eq('submitted_to', 'USG')
+        .neq('status', 'Deleted (Previously Approved)')
         .order('submitted_at', { ascending: false });
       if (error) { console.error('Error loading submissions:', error); return; }
       setSubmissions(data || []);
@@ -148,6 +152,7 @@ export default function SubmissionsPage({
         .from('submissions')
         .select('*')
         .eq('submitted_to', 'OSLD')
+        .neq('status', 'Deleted (Previously Approved)')
         .order('submitted_at', { ascending: false });
       if (error) { console.error('Error loading submissions:', error); return; }
       setSubmissions(data || []);
@@ -160,6 +165,7 @@ export default function SubmissionsPage({
         .select('*')
         .eq('submitted_to', 'COA')
         .in('submission_type', ['Accomplishment Report', 'Liquidation Report', 'Letter of Appeal'])
+        .neq('status', 'Deleted (Previously Approved)')
         .order('submitted_at', { ascending: false });
       if (error) { console.error('Error loading submissions:', error); return; }
       setSubmissions(data || []);
@@ -171,6 +177,7 @@ export default function SubmissionsPage({
         .from('submissions')
         .select('*')
         .eq('organization', orgShortName)
+        .neq('status', 'Deleted (Previously Approved)')
         .order('submitted_at', { ascending: false });
       if (error) { console.error('Error loading submissions:', error); return; }
       setSubmissions(data || []);

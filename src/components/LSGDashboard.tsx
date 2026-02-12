@@ -638,6 +638,8 @@ export default function LSGDashboard() {
   const [documentToDelete, setDocumentToDelete] = useState<{ id: string; name: string } | null>(null);
   const [hasMissedDeadline, setHasMissedDeadline] = useState(false);
   const [activityLogsTab, setActivityLogsTab] = useState<"my-logs" | "ar-lr" | "request" | "appeal">("my-logs");
+  const [isFileDeleteDialogOpen, setIsFileDeleteDialogOpen] = useState(false);
+  const [fileToDelete, setFileToDelete] = useState<{ id: string; fileName: string; fileType: string; status: string } | null>(null);
 
   // Accomplishment Report state
   const [accomplishmentActivityTitle, setAccomplishmentActivityTitle] = useState("");
@@ -1537,12 +1539,14 @@ export default function LSGDashboard() {
   // Load activity logs
   useEffect(() => {
     const loadActivityLogs = async () => {
-      // Show submissions where: organization is LSG OR submitted_to is LSG OR approved_by is LSG
-      // This ensures files remain visible even after being endorsed to COA
+      // Show submissions where: 
+      // 1. submitted_to is LSG (submissions received by LSG from other orgs)
+      // 2. approved_by is LSG (submissions endorsed by LSG to COA)
+      // But NOT LSG's own pending submissions to other orgs (LCO/USG)
       const { data } = await supabase
         .from('submissions')
         .select('*')
-        .or('organization.eq.LSG,submitted_to.eq.LSG,approved_by.eq.LSG')
+        .or('submitted_to.eq.LSG,approved_by.eq.LSG')
         .order('submitted_at', { ascending: false });
       
       if (data) {
@@ -1781,11 +1785,15 @@ export default function LSGDashboard() {
 
   // Reload activity logs function
   const reloadActivityLogs = async () => {
-    // Show submissions where: organization is LSG OR submitted_to is LSG OR approved_by is LSG
+    // Show submissions where: 
+    // 1. submitted_to is LSG (submissions received by LSG from other orgs)
+    // 2. approved_by is LSG (submissions endorsed by LSG to COA)
+    // But NOT LSG's own pending submissions to other orgs (LCO/USG)
     const { data } = await supabase
       .from('submissions')
       .select('*')
-      .or('organization.eq.LSG,submitted_to.eq.LSG,approved_by.eq.LSG')
+      .or('submitted_to.eq.LSG,approved_by.eq.LSG')
+      .neq('status', 'Deleted (Previously Approved)')
       .order('submitted_at', { ascending: false });
     
     if (data) {
@@ -1887,6 +1895,66 @@ export default function LSGDashboard() {
       setPendingSubmissionStatus(data[0].status);
     } else {
       setPendingSubmissionStatus(null);
+    }
+  };
+
+  // Handle individual file deletion
+  const handleDeleteFile = async () => {
+    if (!fileToDelete) return;
+
+    try {
+      const isEndorsedToCOA = fileToDelete.status === 'Approved'; // Simplified check
+      
+      // If endorsed to COA, don't allow deletion
+      if (isEndorsedToCOA) {
+        toast({
+          title: "Cannot Delete",
+          description: "This file has been endorsed and cannot be deleted.",
+          variant: "destructive"
+        });
+        setIsFileDeleteDialogOpen(false);
+        setFileToDelete(null);
+        return;
+      }
+
+      // If approved, mark as deleted instead of removing to prevent deadline reappearance
+      if (fileToDelete.status === 'Approved' && (fileToDelete.fileType === 'Accomplishment Report' || fileToDelete.fileType === 'Liquidation Report')) {
+        const { error } = await supabase
+          .from('submissions')
+          .update({
+            status: 'Deleted (Previously Approved)',
+            file_url: null,
+            file_name: null,
+            gdrive_link: null
+          })
+          .eq('id', fileToDelete.id);
+        
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('submissions')
+          .delete()
+          .eq('id', fileToDelete.id);
+        
+        if (error) throw error;
+      }
+      
+      toast({
+        title: "Success",
+        description: `${fileToDelete.fileType} deleted successfully.`,
+      });
+      
+      setIsFileDeleteDialogOpen(false);
+      setFileToDelete(null);
+      setIsLogDetailOpen(false);
+      reloadActivityLogs();
+    } catch (error) {
+      console.error('Error deleting file:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete file.",
+        variant: "destructive"
+      });
     }
   };
 
@@ -3393,6 +3461,48 @@ export default function LSGDashboard() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* File Delete Confirmation Dialog */}
+        <Dialog open={isFileDeleteDialogOpen} onOpenChange={setIsFileDeleteDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-bold text-red-600">
+                Delete File
+              </DialogTitle>
+            </DialogHeader>
+            <div className="py-4">
+              <p className="text-gray-700">
+                Are you sure you want to delete this file?
+              </p>
+              {fileToDelete && (
+                <div className="mt-3 p-3 bg-gray-50 rounded border border-gray-200">
+                  <p className="text-sm font-semibold text-gray-700">{fileToDelete.fileType}</p>
+                  <p className="text-xs text-gray-500 mt-1">{fileToDelete.fileName || 'Untitled'}</p>
+                </div>
+              )}
+              <p className="mt-3 text-sm text-red-500 font-medium">
+                This action cannot be undone.
+              </p>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsFileDeleteDialogOpen(false);
+                  setFileToDelete(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleDeleteFile}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                Delete
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
@@ -4444,45 +4554,14 @@ export default function LSGDashboard() {
                               size="sm" 
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                              onClick={async () => {
-                                  try {
-                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
-                                    if (selectedLog.rtcData.status === 'Approved') {
-                                      const { error } = await supabase
-                                        .from('submissions')
-                                        .update({
-                                          status: 'Deleted (Previously Approved)',
-                                          file_url: null,
-                                          file_name: null,
-                                          gdrive_link: null
-                                        })
-                                        .eq('id', selectedLog.rtcData.id);
-                                      
-                                      if (error) throw error;
-                                    } else {
-                                      const { error } = await supabase
-                                        .from('submissions')
-                                        .delete()
-                                        .eq('id', selectedLog.rtcData.id);
-                                      
-                                      if (error) throw error;
-                                    }
-                                    
-                                    toast({
-                                      title: "Success",
-                                      description: "File deleted successfully.",
-                                    });
-                                    
-                                    setIsLogDetailOpen(false);
-                                    reloadActivityLogs();
-                                   } catch (error) {
-                                    console.error('Error deleting file:', error);
-                                    toast({
-                                      title: "Error",
-                                      description: "Failed to delete file.",
-                                      variant: "destructive"
-                                    });
-                                  }
+                              onClick={() => {
+                                setFileToDelete({
+                                  id: selectedLog.rtcData.id,
+                                  fileName: selectedLog.rtcData.file_name,
+                                  fileType: 'Request to Conduct Activity',
+                                  status: selectedLog.rtcData.status
+                                });
+                                setIsFileDeleteDialogOpen(true);
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -4516,45 +4595,14 @@ export default function LSGDashboard() {
                               size="sm" 
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                              onClick={async () => {
-                                  try {
-                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
-                                    if (selectedLog.accomplishmentData.status === 'Approved') {
-                                      const { error } = await supabase
-                                        .from('submissions')
-                                        .update({
-                                          status: 'Deleted (Previously Approved)',
-                                          file_url: null,
-                                          file_name: null,
-                                          gdrive_link: null
-                                        })
-                                        .eq('id', selectedLog.accomplishmentData.id);
-                                      
-                                      if (error) throw error;
-                                    } else {
-                                      const { error } = await supabase
-                                        .from('submissions')
-                                        .delete()
-                                        .eq('id', selectedLog.accomplishmentData.id);
-                                      
-                                      if (error) throw error;
-                                    }
-                                    
-                                    toast({
-                                      title: "Success",
-                                      description: "File deleted successfully.",
-                                    });
-                                    
-                                    setIsLogDetailOpen(false);
-                                    reloadActivityLogs();
-                                   } catch (error) {
-                                    console.error('Error deleting file:', error);
-                                    toast({
-                                      title: "Error",
-                                      description: "Failed to delete file.",
-                                      variant: "destructive"
-                                    });
-                                  }
+                              onClick={() => {
+                                setFileToDelete({
+                                  id: selectedLog.accomplishmentData.id,
+                                  fileName: selectedLog.accomplishmentData.file_name,
+                                  fileType: 'Accomplishment Report',
+                                  status: selectedLog.accomplishmentData.status
+                                });
+                                setIsFileDeleteDialogOpen(true);
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -4588,45 +4636,14 @@ export default function LSGDashboard() {
                               size="sm" 
                               variant="ghost" 
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                              onClick={async () => {
-                                  try {
-                                    // If approved, mark as deleted instead of removing to prevent deadline reappearance
-                                    if (selectedLog.liquidationData.status === 'Approved') {
-                                      const { error } = await supabase
-                                        .from('submissions')
-                                        .update({
-                                          status: 'Deleted (Previously Approved)',
-                                          file_url: null,
-                                          file_name: null,
-                                          gdrive_link: null
-                                        })
-                                        .eq('id', selectedLog.liquidationData.id);
-                                      
-                                      if (error) throw error;
-                                    } else {
-                                      const { error } = await supabase
-                                        .from('submissions')
-                                        .delete()
-                                        .eq('id', selectedLog.liquidationData.id);
-                                      
-                                      if (error) throw error;
-                                    }
-                                    
-                                    toast({
-                                      title: "Success",
-                                      description: "File deleted successfully.",
-                                    });
-                                    
-                                    setIsLogDetailOpen(false);
-                                    reloadActivityLogs();
-                                   } catch (error) {
-                                    console.error('Error deleting file:', error);
-                                    toast({
-                                      title: "Error",
-                                      description: "Failed to delete file.",
-                                      variant: "destructive"
-                                    });
-                                  }
+                              onClick={() => {
+                                setFileToDelete({
+                                  id: selectedLog.liquidationData.id,
+                                  fileName: selectedLog.liquidationData.file_name,
+                                  fileType: 'Liquidation Report',
+                                  status: selectedLog.liquidationData.status
+                                });
+                                setIsFileDeleteDialogOpen(true);
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -4732,45 +4749,14 @@ export default function LSGDashboard() {
                           size="sm" 
                           variant="ghost" 
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          onClick={async () => {
-                            try {
-                                // Check if submission was approved - if so, mark as deleted instead of removing
-                                if ((selectedLog.status === 'Approved') && (selectedLog.type === 'Accomplishment Report' || selectedLog.type === 'Liquidation Report')) {
-                                  const { error } = await supabase
-                                    .from('submissions')
-                                    .update({
-                                      status: 'Deleted (Previously Approved)',
-                                      file_url: null,
-                                      file_name: null,
-                                      gdrive_link: null
-                                    })
-                                    .eq('id', selectedLog.id);
-                                  
-                                  if (error) throw error;
-                                } else {
-                                  const { error } = await supabase
-                                    .from('submissions')
-                                    .delete()
-                                    .eq('id', selectedLog.id);
-                                  
-                                  if (error) throw error;
-                                }
-                                
-                                toast({
-                                  title: "Success",
-                                  description: "File deleted successfully.",
-                                });
-                                
-                                setIsLogDetailOpen(false);
-                                loadActivityLogs();
-                              } catch (error) {
-                                console.error('Error deleting file:', error);
-                                toast({
-                                  title: "Error",
-                                  description: "Failed to delete file.",
-                                  variant: "destructive"
-                                });
-                              }
+                          onClick={() => {
+                            setFileToDelete({
+                              id: selectedLog.id,
+                              fileName: selectedLog.fileName || 'Untitled',
+                              fileType: selectedLog.type,
+                              status: selectedLog.status
+                            });
+                            setIsFileDeleteDialogOpen(true);
                           }}
                         >
                           <Trash2 className="h-4 w-4" />

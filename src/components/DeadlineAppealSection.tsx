@@ -43,17 +43,20 @@ const DeadlineAppealSection = memo(({ deadlineType, eventId, orgShortName, targe
     checkAppealStatus();
   }, [orgShortName, reportType, eventId]);
 
-  // Check if appeal was submitted by target organization (for LCO viewing AO appeals, USG viewing LSG appeals)
+  // Check if appeal was submitted by target organization (for LCO viewing AO appeals, USG viewing LSG appeals, COA viewing LCO appeals)
   useEffect(() => {
     const checkTargetOrgAppealStatus = async () => {
       if (!targetOrg || targetOrg === orgShortName) return;
       
-      // LCO checks for AO appeals, USG checks for LSG appeals
+      // LCO checks for AO appeals, USG checks for LSG appeals, COA checks for LCO/USG appeals
       let submittedToOrg = '';
       if (orgShortName === 'LCO' && targetOrg === 'AO') {
         submittedToOrg = 'LCO';
       } else if (orgShortName === 'USG' && targetOrg === 'LSG') {
         submittedToOrg = 'USG';
+      } else if (orgShortName === 'COA' && (targetOrg === 'LCO' || targetOrg === 'USG' || targetOrg === 'AO' || targetOrg === 'LSG' || targetOrg === 'GSC' || targetOrg === 'USED' || targetOrg === 'TGP')) {
+        // COA checks for appeals submitted by any org to COA
+        submittedToOrg = 'COA';
       }
       
       if (!submittedToOrg) return;
@@ -206,7 +209,7 @@ const DeadlineAppealSection = memo(({ deadlineType, eventId, orgShortName, targe
     }
   };
 
-  // Show when target org (AO/LSG) has submitted an appeal to LCO/USG (check this first)
+  // Show when target org (AO/LSG/LCO/USG/etc.) has submitted an appeal to LCO/USG/COA (check this first)
   if (targetOrgAppealSubmitted && !isOwnDeadline) {
     return (
       <div className="mt-3 bg-white rounded-lg shadow-sm border border-gray-300 overflow-hidden">

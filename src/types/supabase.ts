@@ -553,8 +553,8 @@ export type Database = {
           endorsed_to_coa: boolean | null
           endorsed_to_osld: boolean | null
           event_id: string | null
-          file_name: string
-          file_url: string
+          file_name: string | null
+          file_url: string | null
           gdrive_link: string | null
           id: string
           organization: string
@@ -587,8 +587,8 @@ export type Database = {
           endorsed_to_coa?: boolean | null
           endorsed_to_osld?: boolean | null
           event_id?: string | null
-          file_name: string
-          file_url: string
+          file_name?: string | null
+          file_url?: string | null
           gdrive_link?: string | null
           id?: string
           organization: string
@@ -621,8 +621,8 @@ export type Database = {
           endorsed_to_coa?: boolean | null
           endorsed_to_osld?: boolean | null
           event_id?: string | null
-          file_name?: string
-          file_url?: string
+          file_name?: string | null
+          file_url?: string | null
           gdrive_link?: string | null
           id?: string
           organization?: string
